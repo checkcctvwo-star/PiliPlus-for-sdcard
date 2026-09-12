@@ -103,6 +103,6 @@ flutter {
 }
 
 dependencies {
-    implementation("com.arialyy.aria:core:3.8.16")
-    annotationProcessor("com.arialyy.aria:compiler:3.8.16")
+    implementation("me.laoyuyu.aria:core:3.8.16")
+    annotationProcessor("me.laoyuyu.aria:compiler:3.8.16")
 }
