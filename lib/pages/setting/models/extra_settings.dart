@@ -47,7 +47,7 @@ import 'package:PiliPlus/utils/update.dart';
 import 'package:PiliPlus/utils/utils.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
-import 'package:flutter/services.dart' show FilteringTextInputFormatter;
+import 'package:flutter/services.dart' show FilteringTextInputFormatter, MethodChannel;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -81,6 +81,14 @@ List<SettingsModel> get extraSettings => [
       setKey: SettingBoxKey.enableDocProvider,
       defaultVal: Pref.enableDocProvider,
       onChanged: AndroidHelper.updateDocProvider,
+    ),
+  if (Platform.isAndroid)
+    const SwitchModel(
+      title: '优先下载到外置 SD 卡',
+      subtitle: '优先将视频下载到外置 SD 卡',
+      leading: Icon(Icons.sd_card_outlined),
+      setKey: SettingBoxKey.prioritySdCard,
+      defaultVal: false,
     ),
   SplitModel(
     normalModel: const NormalModel.split(

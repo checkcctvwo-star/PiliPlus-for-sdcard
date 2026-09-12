@@ -33,6 +33,15 @@ class MainActivity : AudioServiceActivity() {
                     Aria.download(this).resumeAllTask()
                     result.success(true)
                 }
+                "getExternalSDCardPath" -> {
+                    val dirs = getExternalFilesDirs(null)
+                    // The first element is primary external storage, the second (if exists) is SD card
+                    if (dirs.size > 1 && dirs[1] != null) {
+                        result.success(dirs[1].absolutePath)
+                    } else {
+                        result.success(null)
+                    }
+                }
                 else -> result.notImplemented()
             }
         }

@@ -2,6 +2,7 @@ import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/flutter/list_tile.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:material_ui/material_ui.dart' hide ListTile;
 
@@ -68,6 +69,26 @@ class _SetSwitchItemState extends State<SetSwitchItem> {
         content: const Text('禁用容易受到中间人攻击'),
       );
       if (!val) return;
+    }
+
+    if (val && widget.setKey == SettingBoxKey.prioritySdCard) {
+      try {
+        final path = await const MethodChannel('com.piliplus/download')
+            .invokeMethod<String>('getExternalSDCardPath');
+        if (path == null || path.isEmpty) {
+          val = false;
+          SmartDialog.showToast('未检测到外置 SD 卡');
+          if (mounted) setState(() {});
+          return;
+        } else {
+          SmartDialog.showToast('切换成功: $path');
+        }
+      } catch (e) {
+        val = false;
+        SmartDialog.showToast('未检测到外置 SD 卡');
+        if (mounted) setState(() {});
+        return;
+      }
     }
 
     await GStorage.setting.put(widget.setKey, val);
