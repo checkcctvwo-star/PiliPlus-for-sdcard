@@ -6,8 +6,46 @@ import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/services.dart';
 
 class DownloadManager {
+  static const MethodChannel _channel = MethodChannel('com.piliplus/download');
+
+  static Future<void> init() async {
+    try {
+      await resumeAll();
+    } catch (e) {
+      // print('DownloadManager init error: $e');
+    }
+  }
+
+  static Future<void> startDownload(String url, String savePath) async {
+    try {
+      await _channel.invokeMethod('startDownload', {
+        'url': url,
+        'savePath': savePath,
+      });
+    } catch (e) {
+      // error handling
+    }
+  }
+
+  static Future<void> pauseDownload() async {
+    try {
+      await _channel.invokeMethod('pauseDownload');
+    } catch (e) {
+      // error handling
+    }
+  }
+
+  static Future<void> resumeAll() async {
+    try {
+      await _channel.invokeMethod('resumeAll');
+    } catch (e) {
+      // error handling
+    }
+  }
+
   final String url;
   final String path;
   final void Function(int, int)? onReceiveProgress;
