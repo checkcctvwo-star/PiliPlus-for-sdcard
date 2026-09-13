@@ -110,7 +110,10 @@ class DownloadService extends GetxService {
   }
 
   void initDownloadList() {
-    waitForInitialization = _readDownloadList();
+    waitForInitialization = () async {
+      await DownloadManager.init();
+      await _readDownloadList();
+    }();
   }
 
   Future<void> _readDownloadList() async {
