@@ -72,10 +72,16 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (Platform.isAndroid) {
-    final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
-    downloadPath = externalStorageDirPath != null
-        ? path.join(externalStorageDirPath, PathUtils.downloadDir)
-        : defDownloadPath;
+    final type = GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
+    final customDownPath = Pref.downloadPath;
+    if ((type == 1 || type == 2) && customDownPath != null && customDownPath.isNotEmpty) {
+      downloadPath = customDownPath;
+    } else {
+      final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
+      downloadPath = externalStorageDirPath != null
+          ? path.join(externalStorageDirPath, PathUtils.downloadDir)
+          : defDownloadPath;
+    }
   } else {
     downloadPath = defDownloadPath;
   }

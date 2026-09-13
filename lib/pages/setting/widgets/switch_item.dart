@@ -71,26 +71,6 @@ class _SetSwitchItemState extends State<SetSwitchItem> {
       if (!val) return;
     }
 
-    if (val && widget.setKey == SettingBoxKey.prioritySdCard) {
-      try {
-        final path = await const MethodChannel('com.piliplus/download')
-            .invokeMethod<String>('getExternalSDCardPath');
-        if (path == null || path.isEmpty) {
-          val = false;
-          SmartDialog.showToast('未检测到外置 SD 卡');
-          if (mounted) setState(() {});
-          return;
-        } else {
-          SmartDialog.showToast('切换成功: $path');
-        }
-      } catch (e) {
-        val = false;
-        SmartDialog.showToast('未检测到外置 SD 卡');
-        if (mounted) setState(() {});
-        return;
-      }
-    }
-
     await GStorage.setting.put(widget.setKey, val);
 
     widget.onChanged?.call(val);

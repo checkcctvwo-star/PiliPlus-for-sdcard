@@ -83,12 +83,16 @@ List<SettingsModel> get extraSettings => [
       onChanged: AndroidHelper.updateDocProvider,
     ),
   if (Platform.isAndroid)
-    const SwitchModel(
-      title: '优先下载到外置 SD 卡',
-      subtitle: '优先将视频下载到外置 SD 卡',
-      leading: Icon(Icons.sd_card_outlined),
-      setKey: SettingBoxKey.prioritySdCard,
-      defaultVal: false,
+    NormalModel(
+      title: '下载目录',
+      leading: const Icon(Icons.drive_folder_upload_outlined),
+      getSubtitle: () {
+        final type = GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
+        if (type == 1) return 'SD卡存储';
+        if (type == 2) return downloadPath;
+        return '本机存储 (默认)';
+      },
+      onTap: _showAndroidDownPathDialog,
     ),
   SplitModel(
     normalModel: const NormalModel.split(
@@ -1214,6 +1218,77 @@ void _showCacheDialog(BuildContext context, VoidCallback setState) {
             }
           },
           child: const Text('确定'),
+        ),
+      ],
+    ),
+  );
+}
+
+void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
+  showDialog(
+    context: context,
+    builder: (context) => SimpleDialog(
+      title: const Text('选择下载目录'),
+      clipBehavior: Clip.hardEdge,
+      contentPadding: const EdgeInsets.symmetric(vertical: 12),
+      children: [
+        DialogOption(
+          onPressed: () async {
+            Get.back();
+            // Since on Android the default download path is created dynamically based on external storage directory,
+            // we will let the app restart logic or just reset download path to delete the custom path
+            // When downloadDirType is 0, main.dart will figure it out on restart, or we can just fetch it:
+            downloadPath = defDownloadPath;
+            GStorage.setting.put(SettingBoxKey.downloadDirType, 0);
+            GStorage.setting.delete(SettingBoxKey.downloadPath);
+            setState();
+            SmartDialog.showToast('已恢复本机存储 (重启生效)');
+          },
+          child: const Text('1. 本机存储 (默认)', style: TextStyle(fontSize: 14)),
+        ),
+        DialogOption(
+          onPressed: () async {
+            Get.back();
+            try {
+              final path = await const MethodChannel('com.piliplus/download')
+                  .invokeMethod<String>('getExternalSDCardPath');
+              if (path == null || path.isEmpty) {
+                SmartDialog.showToast('未检测到外置 SD 卡');
+                return;
+              }
+              if (downloadPath == path) return;
+              downloadPath = path;
+              GStorage.setting.put(SettingBoxKey.downloadDirType, 1);
+              GStorage.setting.put(SettingBoxKey.downloadPath, path);
+              setState();
+              Get.find<DownloadService>().initDownloadList();
+              SmartDialog.showToast('切换成功: $path');
+            } catch (e) {
+              SmartDialog.showToast('未检测到外置 SD 卡');
+            }
+          },
+          child: const Text('2. SD卡存储 (如果有)', style: TextStyle(fontSize: 14)),
+        ),
+        DialogOption(
+          onPressed: () async {
+            Get.back();
+            try {
+              final path = await const MethodChannel('com.piliplus/download')
+                  .invokeMethod<String>('selectCustomDirectory');
+              if (path == null || path.isEmpty) return;
+              if (path == downloadPath) return;
+              
+              downloadPath = path;
+              GStorage.setting.put(SettingBoxKey.downloadDirType, 2);
+              GStorage.setting.put(SettingBoxKey.downloadPath, path);
+              setState();
+              Get.find<DownloadService>().initDownloadList();
+              SmartDialog.showToast('已选择: $path');
+            } catch (e) {
+              SmartDialog.showToast('选择自定义目录失败');
+            }
+          },
+          child: const Text('3. 自定义目录', style: TextStyle(fontSize: 14)),
         ),
       ],
     ),
