@@ -51,7 +51,9 @@ import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/plugin/pl_player/models/heart_beat_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
+import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/connectivity_utils.dart';
 import 'package:PiliPlus/utils/extension/context_ext.dart';
@@ -722,18 +724,60 @@ class VideoDetailController extends GetxController
     Duration? seek = defaultST ?? playedTime;
     if (seek == .zero) seek = null;
     seek ??= getFirstSegment();
+
+    // Build the DataSource: prefer resolving SAF content:// URIs to real paths
+    // (mpv-android /proc/self/fd technique) when the entry was migrated to SAF.
+    DataSource dataSource;
+    if (isFileSource) {
+      final safUris = entry.safFileUris;
+      if (safUris != null && safUris.isNotEmpty) {
+        // Try to resolve SAF URIs to real paths so libmpv can open them.
+        final videoKey = entry.mediaType == 1
+            ? PathUtils.videoNameType1
+            : PathUtils.videoNameType2;
+        final videoUri = safUris[videoKey];
+        final audioUri = entry.hasDashAudio ? safUris[PathUtils.audioNameType2] : null;
+
+        final videoPath =
+            videoUri != null ? await DownloadManager.resolveContentUri(videoUri) : null;
+        final audioPath =
+            audioUri != null ? await DownloadManager.resolveContentUri(audioUri) : null;
+
+        if (videoPath != null) {
+          // ✅ SAF URIs resolved — use real paths with media_kit.
+          dataSource = SafResolvedSource(
+            videoSource: videoPath,
+            audioSource: audioPath,
+          );
+        } else {
+          // ⚠️ Resolution failed (unusual) — fall back to local path;
+          // this will also fail if files were deleted by _migrateToSafIfNeeded,
+          // but we don't have a better option here.
+          dataSource = FileSource(
+            dir: args['dirPath'],
+            typeTag: entry.typeTag!,
+            isMp4: entry.mediaType == 1,
+            hasDashAudio: entry.hasDashAudio,
+          );
+        }
+      } else {
+        // No SAF migration: files are still at the local path.
+        dataSource = FileSource(
+          dir: args['dirPath'],
+          typeTag: entry.typeTag!,
+          isMp4: entry.mediaType == 1,
+          hasDashAudio: entry.hasDashAudio,
+        );
+      }
+    } else {
+      dataSource = NetworkSource(
+        videoSource: videoUrl!,
+        audioSource: audioUrl,
+      );
+    }
+
     await plPlayerController.setDataSource(
-      isFileSource
-          ? FileSource(
-              dir: args['dirPath'],
-              typeTag: entry.typeTag!,
-              isMp4: entry.mediaType == 1,
-              hasDashAudio: entry.hasDashAudio,
-            )
-          : NetworkSource(
-              videoSource: videoUrl!,
-              audioSource: audioUrl,
-            ),
+      dataSource,
       seekTo: seek,
       duration: data.timeLength == null
           ? null

@@ -75,6 +75,36 @@ class DownloadManager {
     }
   }
 
+  /// Resolves a SAF [contentUri] (content://...) to a real file path that
+  /// libmpv / media_kit can open directly.
+  ///
+  /// Uses the mpv-android /proc/self/fd trick:
+  ///   1. Open the URI with ContentResolver → get a file descriptor (fd).
+  ///   2. Resolve `/proc/self/fd/<fd>` symlink → real absolute path.
+  ///   3. If the symlink cannot be resolved (rare, e.g. strict SELinux),
+  ///      the Kotlin side keeps the fd open and returns `/proc/self/fd/<fd>`
+  ///      which libmpv can still read via the open fd.
+  ///
+  /// Call [clearSafPfds] after playback ends to release any held fds.
+  static Future<String?> resolveContentUri(String contentUri) async {
+    try {
+      return await _channel.invokeMethod<String>(
+        'resolveContentUriToPath',
+        {'uri': contentUri},
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Releases file descriptors held by [resolveContentUri] for the
+  /// `/proc/self/fd/<n>` fallback case. Call after playback ends.
+  static Future<void> clearSafPfds() async {
+    try {
+      await _channel.invokeMethod<void>('clearSafPfds');
+    } catch (_) {}
+  }
+
   final String url;
   final String path;
   final void Function(int, int)? onReceiveProgress;

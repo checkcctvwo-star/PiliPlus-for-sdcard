@@ -38,3 +38,14 @@ class FileSource extends DataSource {
              : path.join(dir, typeTag, PathUtils.audioNameType2),
        );
 }
+
+/// A [DataSource] whose video/audio paths have already been resolved from SAF
+/// content:// URIs to real absolute paths (or /proc/self/fd/<n> fallback paths)
+/// via [DownloadManager.resolveContentUri]. Treated like [FileSource] by the
+/// player controller (no network caching, no refresh, etc.).
+class SafResolvedSource extends DataSource {
+  SafResolvedSource({
+    required super.videoSource,
+    super.audioSource,
+  });
+}

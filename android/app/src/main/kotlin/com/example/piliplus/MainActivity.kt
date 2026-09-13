@@ -23,6 +23,12 @@ class MainActivity : AudioServiceActivity() {
     private val REQUEST_CODE_OPEN_DOCUMENT_TREE = 42
     private var pendingDirectoryResult: MethodChannel.Result? = null
     private val safExecutor = java.util.concurrent.Executors.newFixedThreadPool(1)
+
+    // Holds open ParcelFileDescriptors for SAF URIs whose real path could not be
+    // resolved via /proc/self/fd (rare on SD cards with strict SELinux). They must
+    // stay open as long as the mpv /proc/self/fd/<n> path is in use.
+    private val safPfds = mutableListOf<android.os.ParcelFileDescriptor>()
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.piliplus/download").setMethodCallHandler { call, result ->
@@ -164,7 +170,63 @@ class MainActivity : AudioServiceActivity() {
                     prefs.edit().remove("custom_saf_uri").apply()
                     result.success(true)
                 }
+                // ── SAF Playback Bridge ──────────────────────────────────────────────
+                // Inspired by mpv-android/Utils.kt findRealPath() technique.
+                // Opens the SAF content:// URI and resolves /proc/self/fd/<n> to the
+                // real absolute path so libmpv (media_kit) can open the file directly.
+                "resolveContentUriToPath" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString == null) {
+                        result.error("INVALID_ARGS", "uri is null", null)
+                        return@setMethodCallHandler
+                    }
+                    safExecutor.execute {
+                        try {
+                            val uri = Uri.parse(uriString)
+                            val pfd = contentResolver.openFileDescriptor(uri, "r")
+                            if (pfd == null) {
+                                runOnUiThread { result.error("OPEN_FAILED", "Cannot open URI: $uriString", null) }
+                                return@execute
+                            }
+                            val fd = pfd.fd
+                            val procPath = "/proc/self/fd/$fd"
+                            // Try to resolve the symlink to a real absolute path.
+                            // If it resolves to a non-/proc path and is readable, we can
+                            // close the PFD immediately (real file remains on disk).
+                            val resolvedPath: String = try {
+                                val canonical = java.io.File(procPath).canonicalPath
+                                if (!canonical.startsWith("/proc") && java.io.File(canonical).canRead()) {
+                                    pfd.close() // PFD no longer needed
+                                    canonical
+                                } else {
+                                    // Could not resolve to real path (e.g. strict SELinux).
+                                    // Keep PFD open; mpv can open /proc/self/fd/<n> directly.
+                                    synchronized(safPfds) { safPfds.add(pfd) }
+                                    procPath
+                                }
+                            } catch (e: Exception) {
+                                // Fallback: keep PFD open and give mpv the proc path.
+                                synchronized(safPfds) { safPfds.add(pfd) }
+                                procPath
+                            }
+                            runOnUiThread { result.success(resolvedPath) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("RESOLVE_ERROR", e.message, e.toString()) }
+                        }
+                    }
+                }
+                // Call this when playback finishes to release any held FDs.
+                "clearSafPfds" -> {
+                    safExecutor.execute {
+                        synchronized(safPfds) {
+                            safPfds.forEach { try { it.close() } catch (_: Exception) {} }
+                            safPfds.clear()
+                        }
+                        runOnUiThread { result.success(null) }
+                    }
+                }
                 else -> result.notImplemented()
+
             }
         }
     }

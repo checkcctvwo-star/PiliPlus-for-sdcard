@@ -790,7 +790,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
 
     final Map<String, String> extras = {
-      if (dataSource is FileSource)
+      if (dataSource is FileSource || dataSource is SafResolvedSource)
         'cache': 'no'
       else if (isLive)
         ...liveBuffer
@@ -828,7 +828,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   Future<void>? refreshPlayer() {
-    if (dataSource is FileSource) {
+    if (dataSource is FileSource || dataSource is SafResolvedSource) {
       return null;
     }
     if (_videoPlayerController case final ctr? when (ctr.current.isNotEmpty)) {
