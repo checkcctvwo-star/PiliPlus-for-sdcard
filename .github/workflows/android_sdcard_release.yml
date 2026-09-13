@@ -1,0 +1,146 @@
+name: Android Release Build (SD Card Fix)
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.agents/**'
+      - '.worktrees/**'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      tag_suffix:
+        description: 'Release tag suffix (e.g. v1.0.0). Leave empty to auto-generate.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  android-release:
+    name: Build Android Release APK (arm64 + arm32 + x86_64)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create GitHub Release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: |
+            android/*.gradle*
+            android/**/gradle-wrapper.properties
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # 本仓库依赖上游 Flutter SDK / material_ui / cupertino_ui 补丁才能编译，
+      # 缺少这一步 release 构建会因 Dart 编译错误失败。
+      - name: Apply Patch
+        shell: pwsh
+        run: lib/scripts/patch.ps1 android
+
+      # Build release APKs split by ABI — signed with default debug keystore
+      # (release build = optimized/minified, debug keystore = sideloadable without Play Store)
+      - name: Build Release APKs (split per ABI)
+        run: |
+          flutter build apk \
+            --release \
+            --split-per-abi \
+            --no-pub
+
+      # Generate a timestamp-based tag or use user-supplied suffix
+      - name: Generate release tag
+        id: tag
+        run: |
+          SUFFIX="${{ github.event.inputs.tag_suffix }}"
+          if [ -z "$SUFFIX" ]; then
+            SUFFIX=$(date +'%Y%m%d-%H%M')
+          fi
+          TAG="sdcard-fix-${SUFFIX}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      # Rename APKs to meaningful names
+      - name: Rename APKs
+        shell: bash
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          for file in build/app/outputs/flutter-apk/app-*-release.apk; do
+            abi=$(echo "$file" | sed -E 's|.*app-(.*)-release\.apk|\1|')
+            dest="PiliPlus_sdcard_${TAG}_${abi}.apk"
+            mv "$file" "$dest"
+            echo "Renamed: $file -> $dest"
+          done
+
+      # Upload each ABI as a separate artifact (available 90 days)
+      - name: Upload arm64-v8a APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus-sdcard-arm64-v8a
+          path: PiliPlus_sdcard_*_arm64-v8a.apk
+          retention-days: 90
+
+      - name: Upload armeabi-v7a APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus-sdcard-armeabi-v7a
+          path: PiliPlus_sdcard_*_armeabi-v7a.apk
+          retention-days: 90
+
+      - name: Upload x86_64 APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus-sdcard-x86_64
+          path: PiliPlus_sdcard_*_x86_64.apk
+          retention-days: 90
+
+      # Create a pre-release on GitHub Releases with all three APKs
+      - name: Create GitHub Pre-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: "PiliPlus SD Card Fix – ${{ steps.tag.outputs.tag }}"
+          prerelease: true
+          body: |
+            ## PiliPlus SD Card 离线播放修复版
+
+            **修复内容：** 离线视频下载到外部 SD 卡（SAF 目录）后无法播放的问题。
+
+            ### 根因
+            下载完成后文件被迁移到 SAF `content://` URI，本地副本被删除，但播放器仍尝试
+            使用本地绝对路径打开文件，导致 libmpv 找不到文件，表现为黑屏/无声。
+
+            ### 修复方案（方案 A：mpv-android `/proc/self/fd` 技巧）
+            - 播放前通过 `ContentResolver.openFileDescriptor` 打开 SAF URI
+            - 解析 `/proc/self/fd/<fd>` symlink 获取真实绝对路径
+            - 传递给 media_kit / libmpv 直接播放，**无需复制文件，零额外存储占用**
+
+            ### APK 安装说明
+            | 文件名 | 适用设备 |
+            |--------|---------|
+            | `*_arm64-v8a.apk` | 64位 ARM（华为平板、大多数现代手机）⬅️ 推荐 |
+            | `*_armeabi-v7a.apk` | 32位 ARM（老旧设备）|
+            | `*_x86_64.apk` | x86_64 模拟器 |
+
+            > ⚠️ **注意：** 此版本为测试预发布版，使用 release 构建（优化/混淆）但以 debug keystore 签名。
+            > 如已安装官方版或其他签名的版本，需先卸载再安装。
+
+            **构建来源 commit：** `${{ github.sha }}`
+          files: PiliPlus_sdcard_*.apk
