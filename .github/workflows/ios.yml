@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -52,8 +52,7 @@ jobs:
             PiliPlus_ios_*.ipa
 
       - name: Upload ios release
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          archive: false
           name: iOS-release
           path: PiliPlus_ios_*.ipa

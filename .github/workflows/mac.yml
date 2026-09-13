@@ -16,7 +16,7 @@ jobs:
     runs-on: macos-26
     steps:
       - name: Checkout code
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -56,8 +56,7 @@ jobs:
             PiliPlus_macos_*.dmg
 
       - name: Upload macos release
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
-          archive: false
           name: macOS-release
           path: PiliPlus_macos_*.dmg

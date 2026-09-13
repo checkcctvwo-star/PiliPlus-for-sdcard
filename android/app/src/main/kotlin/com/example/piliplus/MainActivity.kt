@@ -4,13 +4,21 @@ import android.content.Intent
 import android.content.res.Configuration
 import android.os.Build
 import android.os.Bundle
+import android.net.Uri
+import android.content.Context
 import android.view.WindowManager.LayoutParams
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.arialyy.aria.core.Aria
 
+enum class StoragePreference {
+    Internal, SDCard, CustomSAF
+}
+
 class MainActivity : AudioServiceActivity() {
+    private val REQUEST_CODE_OPEN_DOCUMENT_TREE = 42
+    private var pendingDirectoryResult: MethodChannel.Result? = null
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.piliplus/download").setMethodCallHandler { call, result ->
@@ -42,7 +50,41 @@ class MainActivity : AudioServiceActivity() {
                         result.success(null)
                     }
                 }
+                "selectCustomDirectory" -> {
+                    pendingDirectoryResult = result
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                    startActivityForResult(intent, REQUEST_CODE_OPEN_DOCUMENT_TREE)
+                }
+                "getCustomDirectoryUri" -> {
+                    val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
+                    val uriString = prefs.getString("custom_saf_uri", null)
+                    result.success(uriString)
+                }
                 else -> result.notImplemented()
+            }
+        }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQUEST_CODE_OPEN_DOCUMENT_TREE) {
+            if (resultCode == RESULT_OK) {
+                data?.data?.let { uri ->
+                    contentResolver.takePersistableUriPermission(
+                        uri,
+                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    )
+                    val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().putString("custom_saf_uri", uri.toString()).apply()
+                    pendingDirectoryResult?.success(uri.toString())
+                    pendingDirectoryResult = null
+                } ?: run {
+                    pendingDirectoryResult?.error("NO_URI", "No URI returned", null)
+                    pendingDirectoryResult = null
+                }
+            } else {
+                pendingDirectoryResult?.success(null)
+                pendingDirectoryResult = null
             }
         }
     }
