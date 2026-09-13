@@ -6,8 +6,9 @@ import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:dio/dio.dart';
-import 'package:flutter/services.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/services.dart';
 
 class DownloadManager {
   static const MethodChannel _channel = MethodChannel('com.piliplus/download');
@@ -17,8 +18,10 @@ class DownloadManager {
       final connectivityResult = await Connectivity().checkConnectivity();
       final hasNet = !connectivityResult.contains(ConnectivityResult.none);
       final isCellular = connectivityResult.contains(ConnectivityResult.mobile);
-      if (hasNet && !isCellular) {
-        await resumeAll();
+      final allowCellular = Pref.allowCellularDownload;
+      
+      if (hasNet && (!isCellular || allowCellular)) {
+        await _channel.invokeMethod('resumeFailedTasks');
       }
     } catch (e) {
       // print('DownloadManager init error: $e');

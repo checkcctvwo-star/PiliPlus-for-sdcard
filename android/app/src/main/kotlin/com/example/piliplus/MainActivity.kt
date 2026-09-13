@@ -50,6 +50,17 @@ class MainActivity : AudioServiceActivity() {
                     Aria.download(this).resumeAllTask()
                     result.success(true)
                 }
+                "resumeFailedTasks" -> {
+                    val notComplete = Aria.download(this).allNotCompleteTask
+                    if (notComplete != null) {
+                        for (task in notComplete) {
+                            if (task.state == com.arialyy.aria.core.inf.IEntity.STATE_FAIL || task.state == com.arialyy.aria.core.inf.IEntity.STATE_WAIT) {
+                                Aria.download(this).load(task.id).resume()
+                            }
+                        }
+                    }
+                    result.success(true)
+                }
                 "getExternalSDCardPath" -> {
                     val dirs = getExternalFilesDirs(null)
                     // The first element is primary external storage, the second (if exists) is SD card
@@ -68,6 +79,11 @@ class MainActivity : AudioServiceActivity() {
                     val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
                     val uriString = prefs.getString("custom_saf_uri", null)
                     result.success(uriString)
+                }
+                "clearCustomDirectory" -> {
+                    val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
+                    prefs.edit().remove("custom_saf_uri").apply()
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }
@@ -113,6 +129,11 @@ class MainActivity : AudioServiceActivity() {
         Aria.download(this).register()
     }
 
+    private fun getMimeTypeFromExtension(fileName: String): String {
+        val extension = android.webkit.MimeTypeMap.getFileExtensionFromUrl(fileName)
+        return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+    }
+
     @Download.onTaskComplete
     fun onTaskComplete(task: DownloadTask) {
         val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
@@ -124,19 +145,24 @@ class MainActivity : AudioServiceActivity() {
                     val documentFile = DocumentFile.fromTreeUri(this, safUri)
                     if (documentFile != null) {
                         val fileName = task.entity.fileName
-                        val newFile = documentFile.createFile("video/mp4", fileName)
+                        val mimeType = getMimeTypeFromExtension(fileName)
+                        val tmpFileName = "$fileName.tmp"
+                        var newFile = documentFile.findFile(tmpFileName)
+                        if (newFile == null) {
+                            newFile = documentFile.createFile(mimeType, tmpFileName)
+                        }
                         if (newFile != null) {
                             val newFileUri = newFile.uri
-                            val outputStream = contentResolver.openOutputStream(newFileUri)
-                            val inputStream = FileInputStream(task.entity.filePath)
-                            outputStream?.let { os ->
-                                inputStream.copyTo(os)
-                                os.close()
-                                inputStream.close()
-                                val oldFile = File(task.entity.filePath)
-                                if (oldFile.exists()) {
-                                    oldFile.delete()
+                            contentResolver.openOutputStream(newFileUri)?.use { os ->
+                                FileInputStream(task.entity.filePath).use { inputStream ->
+                                    inputStream.copyTo(os)
+                                    os.flush()
                                 }
+                            }
+                            newFile.renameTo(fileName)
+                            val oldFile = File(task.entity.filePath)
+                            if (oldFile.exists()) {
+                                oldFile.delete()
                             }
                         }
                     }

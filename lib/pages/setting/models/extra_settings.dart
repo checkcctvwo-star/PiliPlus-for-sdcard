@@ -1241,6 +1241,9 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
             downloadPath = defDownloadPath;
             GStorage.setting.put(SettingBoxKey.downloadDirType, 0);
             GStorage.setting.delete(SettingBoxKey.downloadPath);
+            try {
+              await const MethodChannel('com.piliplus/download').invokeMethod<void>('clearCustomDirectory');
+            } catch (_) {}
             setState();
             SmartDialog.showToast('已恢复本机存储 (重启生效)');
           },
@@ -1258,6 +1261,9 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
               }
               if (downloadPath == path) return;
               downloadPath = path;
+              try {
+                await const MethodChannel('com.piliplus/download').invokeMethod<void>('clearCustomDirectory');
+              } catch (_) {}
               GStorage.setting.put(SettingBoxKey.downloadDirType, 1);
               GStorage.setting.put(SettingBoxKey.downloadPath, path);
               setState();
