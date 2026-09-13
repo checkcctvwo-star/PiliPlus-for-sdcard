@@ -55,6 +55,52 @@ class DownloadService extends GetxService {
 
   late Future<void> waitForInitialization;
 
+  final _isBatchProcessing = false.obs;
+  bool get isBatchProcessing => _isBatchProcessing.value;
+
+  Future<void> toggleAllTasks() async {
+    if (_isBatchProcessing.value) return;
+    _isBatchProcessing.value = true;
+
+    try {
+      bool hasActiveTask =
+          curDownload.value?.status.isDownloading == true ||
+          waitDownloadQueue.any(
+            (e) => e.status == DownloadStatus.wait || e.status.isDownloading,
+          );
+
+      if (hasActiveTask) {
+        if (curDownload.value != null &&
+            curDownload.value!.status.isDownloading) {
+          curDownload.value!.status = DownloadStatus.pause;
+          curDownload.refresh();
+        }
+        for (var item in waitDownloadQueue) {
+          if (item.status == DownloadStatus.wait || item.status.isDownloading) {
+            item.status = DownloadStatus.pause;
+          }
+        }
+        waitDownloadQueue.refresh();
+
+        await cancelDownload(isDelete: false, downloadNext: false);
+        await DownloadManager.pauseDownload();
+      } else {
+        for (var item in waitDownloadQueue) {
+          if (item.status == DownloadStatus.pause ||
+              item.status == DownloadStatus.failDownload) {
+            item.status = DownloadStatus.wait;
+          }
+        }
+        waitDownloadQueue.refresh();
+
+        nextDownload();
+        await DownloadManager.resumeAll();
+      }
+    } finally {
+      _isBatchProcessing.value = false;
+    }
+  }
+
   @override
   void onInit() {
     super.onInit();
@@ -182,10 +228,7 @@ class DownloadService extends GetxService {
       return;
     }
     final currentTime = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    final source = SourceInfo(
-      avId: episode.aid!,
-      cid: cid,
-    );
+    final source = SourceInfo(avId: episode.aid!, cid: cid);
     final ep = EpInfo(
       avId: source.avId,
       page: index,
@@ -347,17 +390,14 @@ class DownloadService extends GetxService {
     return true;
   }
 
-  Future<bool> _downloadCover({
-    required BiliDownloadEntryInfo entry,
-  }) async {
+  Future<bool> _downloadCover({required BiliDownloadEntryInfo entry}) async {
     try {
       final filePath = path.join(entry.entryDirPath, PathUtils.coverName);
       if (File(filePath).existsSync()) {
         return true;
       }
-      final file = (await CacheManager.manager.getFileFromCache(
-        entry.cover,
-      ))?.file;
+      final file = (await CacheManager.manager.getFileFromCache(entry.cover))
+          ?.file;
       if (file != null) {
         await file.copy(filePath);
       } else {
@@ -539,10 +579,7 @@ class DownloadService extends GetxService {
       waitDownloadQueue.remove(entry);
     }
     if (curDownload.value?.cid == entry.cid) {
-      await cancelDownload(
-        isDelete: true,
-        downloadNext: downloadNext,
-      );
+      await cancelDownload(isDelete: true, downloadNext: downloadNext);
     }
     final downloadDir = Directory(entry.pageDirPath);
     if (downloadDir.existsSync()) {

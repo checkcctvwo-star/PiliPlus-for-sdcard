@@ -92,6 +92,34 @@ class _DownloadPageState extends State<DownloadPage> with GridMixin {
             child: AppBar(
               title: const Text('离线缓存'),
               actions: [
+                Obx(() {
+                  final isProcessing = _downloadService.isBatchProcessing;
+                  final hasActiveTask =
+                      _downloadService
+                              .curDownload
+                              .value
+                              ?.status
+                              .isDownloading ==
+                          true ||
+                      _downloadService.waitDownloadQueue.any(
+                        (e) =>
+                            e.status == DownloadStatus.wait ||
+                            e.status.isDownloading,
+                      );
+                  return TextButton(
+                    onPressed: isProcessing
+                        ? null
+                        : () => _downloadService.toggleAllTasks(),
+                    child: Text(
+                      hasActiveTask ? "全部暂停" : "全部开始",
+                      style: TextStyle(
+                        color: isProcessing
+                            ? Theme.of(context).disabledColor
+                            : Theme.of(context).colorScheme.onSurface,
+                      ),
+                    ),
+                  );
+                }),
                 IconButton(
                   tooltip: '搜索',
                   onPressed: () async {

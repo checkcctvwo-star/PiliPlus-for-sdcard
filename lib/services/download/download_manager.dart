@@ -7,13 +7,19 @@ import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 class DownloadManager {
   static const MethodChannel _channel = MethodChannel('com.piliplus/download');
 
   static Future<void> init() async {
     try {
-      await resumeAll();
+      final connectivityResult = await Connectivity().checkConnectivity();
+      final hasNet = !connectivityResult.contains(ConnectivityResult.none);
+      final isCellular = connectivityResult.contains(ConnectivityResult.mobile);
+      if (hasNet && !isCellular) {
+        await resumeAll();
+      }
     } catch (e) {
       // print('DownloadManager init error: $e');
     }
