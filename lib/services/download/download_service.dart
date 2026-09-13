@@ -46,9 +46,10 @@ class DownloadService extends GetxService {
   final curDownload = Rxn<BiliDownloadEntryInfo>();
   void _updateCurStatus(DownloadStatus status) {
     if (curDownload.value != null) {
-      curDownload
-        ..value!.status = status
-        ..refresh();
+      curDownload.value!.status = status;
+      if (!_isBatchProcessing.value) {
+        curDownload.refresh();
+      }
     }
   }
 
@@ -294,7 +295,8 @@ class DownloadService extends GetxService {
       ..entryDirPath = entryDir.path
       ..status = DownloadStatus.wait;
     waitDownloadQueue.add(entry);
-    if (curDownload.value?.status.isDownloading != true) {
+    if (curDownload.value?.status.isDownloading != true &&
+        !_isBatchProcessing.value) {
       startDownload(entry);
     }
   }
@@ -340,7 +342,9 @@ class DownloadService extends GetxService {
 
       _curCid = entry.cid;
       curDownload.value = entry;
-      waitDownloadQueue.refresh();
+      if (!_isBatchProcessing.value) {
+        waitDownloadQueue.refresh();
+      }
       await _startDownload(entry);
     });
   }
@@ -503,7 +507,9 @@ class DownloadService extends GetxService {
       entry
         ..downloadedBytes = progress
         ..status = DownloadStatus.downloading;
-      curDownload.refresh();
+      if (!_isBatchProcessing.value) {
+        curDownload.refresh();
+      }
     }
   }
 
