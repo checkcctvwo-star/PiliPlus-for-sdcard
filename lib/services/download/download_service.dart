@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show jsonDecode, jsonEncode;
-import 'dart:io' show Directory, File;
+import 'dart:io' show Directory, File, Platform;
 
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/download.dart';
@@ -20,6 +20,8 @@ import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
@@ -548,6 +550,7 @@ class DownloadService extends GetxService {
     entry
       ..downloadedBytes = entry.totalBytes
       ..isCompleted = true;
+    await _migrateToSafIfNeeded(entry);
     await _updateBiliDownloadEntryJson(entry);
     waitDownloadQueue.remove(entry);
     downloadList.insert(0, entry);
@@ -557,6 +560,76 @@ class DownloadService extends GetxService {
     _downloadManager = null;
     _audioDownloadManager = null;
     nextDownload();
+  }
+
+  /// Moves the finished media artifacts into the custom SAF directory.
+  ///
+  /// Only runs when the storage type is "自定义目录(SAF)" (downloadDirType == 2).
+  /// Each final artifact (`0.mp4`, or `video.m4s` + `audio.m4s`) is copied into
+  /// the SAF tree via the native `saveToSafDirectory` channel. On success the
+  /// private-storage temp file is deleted and the resulting content URIs are
+  /// recorded on [entry] (persisted via `entry.json`).
+  Future<void> _migrateToSafIfNeeded(BiliDownloadEntryInfo entry) async {
+    if (!Platform.isAndroid) return;
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+    if (type != 2) return;
+    final safUri = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+    if (safUri == null || safUri.isEmpty) return;
+
+    final typeTag = entry.typeTag;
+    if (typeTag == null || typeTag.isEmpty) return;
+
+    final videoDir = Directory(path.join(entry.entryDirPath, typeTag));
+    if (!videoDir.existsSync()) return;
+
+    final artifacts = <String>[];
+    final single = File(path.join(videoDir.path, PathUtils.videoNameType1));
+    if (single.existsSync()) {
+      artifacts.add(single.path);
+    } else {
+      final video = File(path.join(videoDir.path, PathUtils.videoNameType2));
+      final audio = File(path.join(videoDir.path, PathUtils.audioNameType2));
+      if (video.existsSync()) artifacts.add(video.path);
+      if (audio.existsSync()) artifacts.add(audio.path);
+    }
+    if (artifacts.isEmpty) return;
+
+    final targetDir = _relativePath(videoDir.path);
+    final uris = <String, String>{};
+    for (final filePath in artifacts) {
+      try {
+        final uri = await DownloadManager.saveToSafDirectory(
+          path: filePath,
+          targetDir: targetDir,
+        );
+        if (uri != null && uri.isNotEmpty) {
+          uris[path.basename(filePath)] = uri;
+          final file = File(filePath);
+          if (file.existsSync()) {
+            await file.tryDel();
+          }
+        }
+      } catch (e) {
+        // Keep the local file so a failed SAF copy never loses the download.
+      }
+    }
+    if (uris.isNotEmpty) {
+      entry.safFileUris = uris;
+    }
+  }
+
+  String _relativePath(String absPath) {
+    var relative = absPath.startsWith(downloadPath)
+        ? absPath.substring(downloadPath.length)
+        : path.basename(absPath);
+    relative = relative.replaceAll('\\', '/');
+    while (relative.startsWith('/')) {
+      relative = relative.substring(1);
+    }
+    return relative;
   }
 
   void nextDownload() {

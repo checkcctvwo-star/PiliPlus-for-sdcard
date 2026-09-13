@@ -89,7 +89,12 @@ List<SettingsModel> get extraSettings => [
       getSubtitle: () {
         final type = GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
         if (type == 1) return 'SD卡存储';
-        if (type == 2) return downloadPath;
+        // For SAF mode, downloadPath is a private working dir; show the stored
+        // content:// tree URI the files are copied into on completion.
+        if (type == 2) {
+          return GStorage.setting.get(SettingBoxKey.downloadPath) as String? ??
+              '自定义目录(SAF)';
+        }
         return '本机存储 (默认)';
       },
       onTap: _showAndroidDownPathDialog,
@@ -1282,9 +1287,10 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
               final path = await const MethodChannel('com.piliplus/download')
                   .invokeMethod<String>('selectCustomDirectory');
               if (path == null || path.isEmpty) return;
-              if (path == downloadPath) return;
-              
-              downloadPath = path;
+              // `path` is a content:// tree URI — not usable by dart:io, so it
+              // is only stored as the SAF destination. Downloads keep writing to
+              // downloadPath (app-private) and are moved into the SAF tree when
+              // each download completes.
               GStorage.setting.put(SettingBoxKey.downloadDirType, 2);
               GStorage.setting.put(SettingBoxKey.downloadPath, path);
               setState();

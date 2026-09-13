@@ -14,8 +14,6 @@ import com.arialyy.aria.core.Aria
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.FileInputStream
-import com.arialyy.annotations.Download
-import com.arialyy.aria.core.task.DownloadTask
 
 enum class StoragePreference {
     Internal, SDCard, CustomSAF
@@ -80,6 +78,82 @@ class MainActivity : AudioServiceActivity() {
                     val uriString = prefs.getString("custom_saf_uri", null)
                     result.success(uriString)
                 }
+                "saveToSafDirectory" -> {
+                    val srcPath = call.argument<String>("path")
+                    val targetDir = call.argument<String>("targetDir")
+                    if (srcPath == null || srcPath.isEmpty()) {
+                        result.error("INVALID_ARGS", "path is null", null)
+                        return@setMethodCallHandler
+                    }
+                    Thread {
+                        try {
+                            val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
+                            val safUriString = prefs.getString("custom_saf_uri", null)
+                            if (safUriString == null) {
+                                runOnUiThread { result.error("NO_SAF_URI", "custom SAF directory is not set", null) }
+                                return@Thread
+                            }
+                            val root = DocumentFile.fromTreeUri(this, Uri.parse(safUriString))
+                            if (root == null) {
+                                runOnUiThread { result.error("SAF_INVALID", "cannot resolve SAF directory", null) }
+                                return@Thread
+                            }
+                            var dir: DocumentFile? = root
+                            if (targetDir != null && targetDir.isNotEmpty()) {
+                                for (segment in targetDir.split("/")) {
+                                    if (segment.isEmpty()) continue
+                                    val current = dir
+                                    if (current == null) {
+                                        break
+                                    }
+                                    val childDir = current.findFile(segment)
+                                    dir = if (childDir != null && childDir.isDirectory) {
+                                        childDir
+                                    } else {
+                                        current.createDirectory(segment)
+                                    }
+                                    if (dir == null) {
+                                        runOnUiThread { result.error("CREATE_DIR_FAILED", "cannot create directory $segment", null) }
+                                        return@Thread
+                                    }
+                                }
+                            }
+                            val dirResolved = dir
+                            if (dirResolved == null) {
+                                runOnUiThread { result.error("CREATE_DIR_FAILED", "cannot resolve target directory", null) }
+                                return@Thread
+                            }
+                            val srcFile = File(srcPath)
+                            val fileName = srcFile.name
+                            val mimeType = getMimeTypeFromExtension(fileName)
+                            val tmpName = ".$fileName.tmp"
+                            var newFile = dirResolved.findFile(tmpName)
+                            if (newFile == null) {
+                                newFile = dirResolved.createFile(mimeType, tmpName)
+                            }
+                            if (newFile == null) {
+                                runOnUiThread { result.error("CREATE_FILE_FAILED", "cannot create file $fileName", null) }
+                                return@Thread
+                            }
+                            try {
+                                contentResolver.openOutputStream(newFile.uri)?.use { os ->
+                                    FileInputStream(srcFile).use { inputStream ->
+                                        inputStream.copyTo(os)
+                                        os.flush()
+                                    }
+                                }
+                            } catch (e: Exception) {
+                                runOnUiThread { result.error("SAF_COPY_FAILED", e.message, e.toString()) }
+                                return@Thread
+                            }
+                            dirResolved.findFile(fileName)?.delete()
+                            newFile.renameTo(fileName)
+                            runOnUiThread { result.success(newFile.uri.toString()) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SAF_COPY_FAILED", e.message, e.toString()) }
+                        }
+                    }.start()
+                }
                 "clearCustomDirectory" -> {
                     val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
                     prefs.edit().remove("custom_saf_uri").apply()
@@ -132,45 +206,6 @@ class MainActivity : AudioServiceActivity() {
     private fun getMimeTypeFromExtension(fileName: String): String {
         val extension = android.webkit.MimeTypeMap.getFileExtensionFromUrl(fileName)
         return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
-    }
-
-    @Download.onTaskComplete
-    fun onTaskComplete(task: DownloadTask) {
-        val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
-        val safUriString = prefs.getString("custom_saf_uri", null)
-        if (safUriString != null) {
-            Thread {
-                try {
-                    val safUri = Uri.parse(safUriString)
-                    val documentFile = DocumentFile.fromTreeUri(this, safUri)
-                    if (documentFile != null) {
-                        val fileName = task.entity.fileName
-                        val mimeType = getMimeTypeFromExtension(fileName)
-                        val tmpFileName = "$fileName.tmp"
-                        var newFile = documentFile.findFile(tmpFileName)
-                        if (newFile == null) {
-                            newFile = documentFile.createFile(mimeType, tmpFileName)
-                        }
-                        if (newFile != null) {
-                            val newFileUri = newFile.uri
-                            contentResolver.openOutputStream(newFileUri)?.use { os ->
-                                FileInputStream(task.entity.filePath).use { inputStream ->
-                                    inputStream.copyTo(os)
-                                    os.flush()
-                                }
-                            }
-                            newFile.renameTo(fileName)
-                            val oldFile = File(task.entity.filePath)
-                            if (oldFile.exists()) {
-                                oldFile.delete()
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }.start()
-        }
     }
 
     override fun onDestroy() {

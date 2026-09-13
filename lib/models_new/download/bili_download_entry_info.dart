@@ -43,6 +43,10 @@ class BiliDownloadEntryInfo with MultiSelectData {
   late String entryDirPath;
   late DownloadStatus status = .wait;
 
+  // fileName -> content:// URI of media artifacts moved to the SAF directory
+  // (only filled when storage is configured as "自定义目录(SAF)").
+  Map<String, String>? safFileUris;
+
   int get cid => source?.cid ?? pageData!.cid;
 
   String get pageId => seasonId ?? avid.toString();
@@ -169,6 +173,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
     this.seasonId,
     this.source,
     this.ep,
+    this.safFileUris,
   });
 
   factory BiliDownloadEntryInfo.fromJson(Map<String, dynamic> json) =>
@@ -207,6 +212,10 @@ class BiliDownloadEntryInfo with MultiSelectData {
         ep: json['ep'] != null
             ? EpInfo.fromJson(json['ep'] as Map<String, dynamic>)
             : null,
+        safFileUris: json['saf_file_uris'] != null
+            ? (json['saf_file_uris'] as Map<String, dynamic>)
+                .map((key, value) => MapEntry(key, value as String))
+            : null,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -237,6 +246,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
     'season_id': ?seasonId,
     'source': ?source?.toJson(),
     'ep': ?ep?.toJson(),
+    'saf_file_uris': ?safFileUris,
   };
 
   @override

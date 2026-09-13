@@ -55,6 +55,26 @@ class DownloadManager {
     }
   }
 
+  /// Copies a finished download artifact into the user-selected SAF directory.
+  ///
+  /// [path] is the absolute path of the source file in the app-private storage.
+  /// [targetDir] is the relative directory (e.g. `avid/c_cid/typeTag`) created
+  /// under the SAF tree. Returns the content:// URI of the copied file, or null
+  /// on failure (in which case the caller keeps the local file).
+  static Future<String?> saveToSafDirectory({
+    required String path,
+    required String targetDir,
+  }) async {
+    try {
+      return await _channel.invokeMethod<String>('saveToSafDirectory', {
+        'path': path,
+        'targetDir': targetDir,
+      });
+    } catch (e) {
+      return null;
+    }
+  }
+
   final String url;
   final String path;
   final void Function(int, int)? onReceiveProgress;

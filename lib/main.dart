@@ -74,7 +74,11 @@ Future<void> _initDownPath() async {
   } else if (Platform.isAndroid) {
     final type = GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
     final customDownPath = Pref.downloadPath;
-    if ((type == 1 || type == 2) && customDownPath != null && customDownPath.isNotEmpty) {
+    // Only "SD卡存储" (type 1) keeps an absolute filesystem path as the working
+    // download directory. "自定义目录(SAF)" (type 2) stores a content:// tree URI
+    // which is not usable by dart:io, so files are written here to the app-private
+    // directory first and moved into the SAF tree when the download completes.
+    if (type == 1 && customDownPath != null && customDownPath.isNotEmpty) {
       downloadPath = customDownPath;
     } else {
       final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
