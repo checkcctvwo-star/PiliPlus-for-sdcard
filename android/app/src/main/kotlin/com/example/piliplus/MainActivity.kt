@@ -11,6 +11,11 @@ import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.arialyy.aria.core.Aria
+import androidx.documentfile.provider.DocumentFile
+import java.io.File
+import java.io.FileInputStream
+import com.arialyy.annotations.Download
+import com.arialyy.aria.core.task.DownloadTask
 
 enum class StoragePreference {
     Internal, SDCard, CustomSAF
@@ -34,6 +39,10 @@ class MainActivity : AudioServiceActivity() {
                     }
                 }
                 "pauseDownload" -> {
+                    Aria.download(this).stopAllTask()
+                    result.success(true)
+                }
+                "pauseAll" -> {
                     Aria.download(this).stopAllTask()
                     result.success(true)
                 }
@@ -100,6 +109,41 @@ class MainActivity : AudioServiceActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+        }
+        Aria.download(this).register()
+    }
+
+    @Download.onTaskComplete
+    fun onTaskComplete(task: DownloadTask) {
+        val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
+        val safUriString = prefs.getString("custom_saf_uri", null)
+        if (safUriString != null) {
+            Thread {
+                try {
+                    val safUri = Uri.parse(safUriString)
+                    val documentFile = DocumentFile.fromTreeUri(this, safUri)
+                    if (documentFile != null) {
+                        val fileName = task.entity.fileName
+                        val newFile = documentFile.createFile("video/mp4", fileName)
+                        if (newFile != null) {
+                            val newFileUri = newFile.uri
+                            val outputStream = contentResolver.openOutputStream(newFileUri)
+                            val inputStream = FileInputStream(task.entity.filePath)
+                            outputStream?.let { os ->
+                                inputStream.copyTo(os)
+                                os.close()
+                                inputStream.close()
+                                val oldFile = File(task.entity.filePath)
+                                if (oldFile.exists()) {
+                                    oldFile.delete()
+                                }
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+            }.start()
         }
     }
 
