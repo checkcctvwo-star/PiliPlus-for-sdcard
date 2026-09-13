@@ -157,6 +157,7 @@ abstract final class SettingBoxKey {
       liveStream = 'liveStream',
       enableDocProvider = 'enableDocProvider',
       downloadDirType = 'downloadDirType',
+      allowCellularDownload = 'allowCellularDownload',
       enableEmoteTooltip = 'enableEmoteTooltip';
 
   static const String minimizeOnExit = 'minimizeOnExit',
