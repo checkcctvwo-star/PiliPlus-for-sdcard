@@ -205,7 +205,6 @@ class MainActivity : AudioServiceActivity() {
             window.attributes.layoutInDisplayCutoutMode =
                 LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-        Aria.download(this).register()
     }
 
     private fun getMimeTypeFromExtension(fileName: String): String {
