@@ -60,10 +60,9 @@ class MainActivity : AudioServiceActivity() {
                     result.success(true)
                 }
                 "getExternalSDCardPath" -> {
-                    val dirs = getExternalFilesDirs(null)
-                    // The first element is primary external storage, the second (if exists) is SD card
-                    if (dirs.size > 1 && dirs[1] != null) {
-                        result.success(dirs[1].absolutePath)
+                    val externalDirs = getExternalFilesDirs(null)
+                    if (externalDirs.size > 1 && externalDirs[1] != null) {
+                        result.success(externalDirs[1]!!.absolutePath)
                     } else {
                         result.success(null)
                     }
@@ -85,18 +84,18 @@ class MainActivity : AudioServiceActivity() {
                         result.error("INVALID_ARGS", "path is null", null)
                         return@setMethodCallHandler
                     }
-                    Thread {
+                    safExecutor.execute {
                         try {
                             val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
                             val safUriString = prefs.getString("custom_saf_uri", null)
                             if (safUriString == null) {
                                 runOnUiThread { result.error("NO_SAF_URI", "custom SAF directory is not set", null) }
-                                return@Thread
+                                return@execute
                             }
                             val root = DocumentFile.fromTreeUri(this, Uri.parse(safUriString))
                             if (root == null) {
                                 runOnUiThread { result.error("SAF_INVALID", "cannot resolve SAF directory", null) }
-                                return@Thread
+                                return@execute
                             }
                             var dir: DocumentFile? = root
                             if (targetDir != null && targetDir.isNotEmpty()) {
@@ -114,14 +113,14 @@ class MainActivity : AudioServiceActivity() {
                                     }
                                     if (dir == null) {
                                         runOnUiThread { result.error("CREATE_DIR_FAILED", "cannot create directory $segment", null) }
-                                        return@Thread
+                                        return@execute
                                     }
                                 }
                             }
                             val dirResolved = dir
                             if (dirResolved == null) {
                                 runOnUiThread { result.error("CREATE_DIR_FAILED", "cannot resolve target directory", null) }
-                                return@Thread
+                                return@execute
                             }
                             val srcFile = File(srcPath)
                             val fileName = srcFile.name
@@ -133,26 +132,31 @@ class MainActivity : AudioServiceActivity() {
                             }
                             if (newFile == null) {
                                 runOnUiThread { result.error("CREATE_FILE_FAILED", "cannot create file $fileName", null) }
-                                return@Thread
+                                return@execute
                             }
                             try {
-                                contentResolver.openOutputStream(newFile.uri)?.use { os ->
+                                val os = contentResolver.openOutputStream(newFile.uri)
+                                    ?: throw java.io.IOException("Failed to open SAF output stream (returned null)")
+                                os.use { outStream ->
                                     FileInputStream(srcFile).use { inputStream ->
-                                        inputStream.copyTo(os)
-                                        os.flush()
+                                        inputStream.copyTo(outStream)
+                                        outStream.flush()
                                     }
                                 }
                             } catch (e: Exception) {
                                 runOnUiThread { result.error("SAF_COPY_FAILED", e.message, e.toString()) }
-                                return@Thread
+                                return@execute
                             }
                             dirResolved.findFile(fileName)?.delete()
-                            newFile.renameTo(fileName)
+                            if (!newFile.renameTo(fileName)) {
+                                runOnUiThread { result.error("SAF_RENAME_FAILED", "renameTo returned false", null) }
+                                return@execute
+                            }
                             runOnUiThread { result.success(newFile.uri.toString()) }
                         } catch (e: Exception) {
                             runOnUiThread { result.error("SAF_COPY_FAILED", e.message, e.toString()) }
                         }
-                    }.start()
+                    }
                 }
                 "clearCustomDirectory" -> {
                     val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
