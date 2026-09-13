@@ -103,6 +103,7 @@ flutter {
 }
 
 dependencies {
+    implementation("androidx.documentfile:documentfile:1.0.1")
     implementation("me.laoyuyu.aria:core:3.8.16")
     annotationProcessor("me.laoyuyu.aria:compiler:3.8.16")
 }

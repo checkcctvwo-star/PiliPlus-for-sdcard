@@ -22,6 +22,7 @@ enum class StoragePreference {
 class MainActivity : AudioServiceActivity() {
     private val REQUEST_CODE_OPEN_DOCUMENT_TREE = 42
     private var pendingDirectoryResult: MethodChannel.Result? = null
+    private val safExecutor = java.util.concurrent.Executors.newFixedThreadPool(1)
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.piliplus/download").setMethodCallHandler { call, result ->
