@@ -240,7 +240,9 @@ class DetailItem extends StatelessWidget {
                                   color: theme.colorScheme.primary,
                                   backgroundColor:
                                       theme.colorScheme.secondaryContainer,
-                                  progress: progress / entry.totalTimeMilli,
+                                  progress: entry.totalTimeMilli > 0
+                                      ? progress / entry.totalTimeMilli
+                                      : 0.0,
                                 ),
                               ],
                             ),

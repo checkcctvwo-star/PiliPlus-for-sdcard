@@ -31,6 +31,7 @@ import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/services/service_locator.dart';
+import 'package:PiliPlus/services/proxy/local_proxy_server.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
@@ -799,7 +800,16 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     };
 
     String video = dataSource.videoSource;
-    if (dataSource.audioSource case final audio? when (audio.isNotEmpty)) {
+    if (isFileSource) {
+      video = Get.find<LocalProxyServer>().getProxyUrl(video);
+    }
+    
+    if (dataSource.audioSource case final audioSrc? when (audioSrc.isNotEmpty)) {
+      String audio = audioSrc;
+      if (isFileSource) {
+        audio = Get.find<LocalProxyServer>().getProxyUrl(audioSrc);
+      }
+      
       if (onlyPlayAudio.value) {
         video = audio;
       } else {

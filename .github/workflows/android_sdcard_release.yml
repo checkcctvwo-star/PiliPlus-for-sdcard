@@ -61,7 +61,7 @@ jobs:
       - name: Build Release APKs (split per ABI)
         run: |
           flutter build apk \
-            --release \
+            --debug \
             --split-per-abi \
             --no-pub
 
@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          for file in build/app/outputs/flutter-apk/app-*-release.apk; do
+          for file in build/app/outputs/flutter-apk/app-*-debug.apk; do
             abi=$(echo "$file" | sed -E 's|.*app-(.*)-release\.apk|\1|')
             dest="PiliPlus_sdcard_${TAG}_${abi}.apk"
             mv "$file" "$dest"

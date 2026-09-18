@@ -23,6 +23,7 @@ import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
@@ -330,6 +331,15 @@ class DownloadService extends GetxService {
 
   Future<void> startDownload(BiliDownloadEntryInfo entry) {
     return _lock.synchronized(() async {
+      try {
+        await _getDownloadPath();
+      } catch (e) {
+        await toggleAllTasks();
+        SmartDialog.showToast('Storage Lost - Please reselect directory');
+        entry.downloadedBytes = 0;
+        flagNotifier.refresh();
+        return;
+      }
       await _downloadManager?.cancel(isDelete: false);
       await _audioDownloadManager?.cancel(isDelete: false);
       _downloadManager = null;
@@ -663,14 +673,24 @@ class DownloadService extends GetxService {
     if (curDownload.value?.cid == entry.cid) {
       await cancelDownload(isDelete: true, downloadNext: downloadNext);
     }
-    final downloadDir = Directory(entry.pageDirPath);
-    if (downloadDir.existsSync()) {
-      if (!await downloadDir.lengthGte(2)) {
-        await downloadDir.tryDel(recursive: true);
-      } else {
-        final entryDir = Directory(entry.entryDirPath);
-        if (entryDir.existsSync()) {
-          await entryDir.tryDel(recursive: true);
+    bool deletedViaSaf = false;
+    if (Platform.isAndroid) {
+      try {
+        final res = await const MethodChannel('com.piliplus/download').invokeMethod<bool>('deleteSafFile', {'path': entry.entryDirPath});
+        deletedViaSaf = res == true;
+      } catch (_) {}
+    }
+    
+    if (!deletedViaSaf) {
+      final downloadDir = Directory(entry.pageDirPath);
+      if (downloadDir.existsSync()) {
+        if (!await downloadDir.lengthGte(2)) {
+          await downloadDir.tryDel(recursive: true);
+        } else {
+          final entryDir = Directory(entry.entryDirPath);
+          if (entryDir.existsSync()) {
+            await entryDir.tryDel(recursive: true);
+          }
         }
       }
     }
@@ -683,7 +703,16 @@ class DownloadService extends GetxService {
     required String pageDirPath,
     bool refresh = true,
   }) async {
-    await Directory(pageDirPath).tryDel(recursive: true);
+    bool deletedViaSaf = false;
+    if (Platform.isAndroid) {
+      try {
+        final res = await const MethodChannel('com.piliplus/download').invokeMethod<bool>('deleteSafFile', {'path': pageDirPath});
+        deletedViaSaf = res == true;
+      } catch (_) {}
+    }
+    if (!deletedViaSaf) {
+      await Directory(pageDirPath).tryDel(recursive: true);
+    }
     downloadList.removeWhere((e) => e.pageDirPath == pageDirPath);
     if (refresh) {
       flagNotifier.refresh();

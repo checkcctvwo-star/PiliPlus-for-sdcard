@@ -10,10 +10,13 @@ import android.view.WindowManager.LayoutParams
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import io.flutter.plugin.common.EventChannel
 import com.arialyy.aria.core.Aria
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileNotFoundException
+import kotlinx.coroutines.*
 
 enum class StoragePreference {
     Internal, SDCard, CustomSAF
@@ -28,9 +31,26 @@ class MainActivity : AudioServiceActivity() {
     // resolved via /proc/self/fd (rare on SD cards with strict SELinux). They must
     // stay open as long as the mpv /proc/self/fd/<n> path is in use.
     private val safPfds = mutableListOf<android.os.ParcelFileDescriptor>()
+    
+    private var migrationJob: Job? = null
+    private var progressSink: EventChannel.EventSink? = null
+
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
+        
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "saf_migration_progress").setStreamHandler(
+            object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    progressSink = events
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    progressSink = null
+                }
+            }
+        )
+
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.piliplus/download").setMethodCallHandler { call, result ->
             when (call.method) {
                 "startDownload" -> {
@@ -224,6 +244,123 @@ class MainActivity : AudioServiceActivity() {
                         }
                         runOnUiThread { result.success(null) }
                     }
+                "deleteSafFile" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString != null) {
+                        try {
+                            val uri = Uri.parse(uriString)
+                            val documentFile = DocumentFile.fromSingleUri(this@MainActivity, uri)
+                            if (documentFile != null && documentFile.exists()) {
+                                documentFile.delete()
+                            } else {
+                                contentResolver.delete(uri, null, null)
+                            }
+                            result.success(true)
+                        } catch (e: FileNotFoundException) {
+                            result.success(true)
+                        } catch (e: Exception) {
+                            result.error("DELETE_FAILED", e.message, e.toString())
+                        }
+                    } else {
+                        result.error("INVALID_ARGS", "uri is null", null)
+                    }
+                }
+                "startMigration" -> {
+                    val oldPath = call.argument<String>("oldPath")
+                    val newUriString = call.argument<String>("newUri")
+                    if (oldPath == null || newUriString == null) {
+                        result.error("INVALID_ARGS", "oldPath or newUri is null", null)
+                        return@setMethodCallHandler
+                    }
+                    
+                    val newUri = Uri.parse(newUriString)
+                    val root = DocumentFile.fromTreeUri(this@MainActivity, newUri)
+                    if (root == null) {
+                        result.error("SAF_INVALID", "cannot resolve new SAF directory", null)
+                        return@setMethodCallHandler
+                    }
+
+                    migrationJob?.cancel()
+                    
+                    migrationJob = CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val oldDir = File(oldPath)
+                            if (!oldDir.exists() || !oldDir.isDirectory) {
+                                withContext(Dispatchers.Main) { result.error("INVALID_PATH", "oldPath is not a valid directory", null) }
+                                return@launch
+                            }
+                            
+                            val files = oldDir.listFiles() ?: emptyArray()
+                            val totalBytes = files.sumOf { it.length() }.toDouble()
+                            var bytesCopied = 0.0
+
+                            for (file in files) {
+                                ensureActive()
+                                if (file.isDirectory) continue
+                                
+                                val fileName = file.name
+                                val mimeType = getMimeTypeFromExtension(fileName)
+                                var newFile = root.findFile(fileName)
+                                if (newFile == null) {
+                                    newFile = root.createFile(mimeType, fileName)
+                                }
+                                
+                                if (newFile == null) {
+                                    throw Exception("Could not create file $fileName in SAF directory")
+                                }
+                                
+                                val os = contentResolver.openOutputStream(newFile.uri) ?: throw Exception("Failed to open SAF output stream")
+                                os.use { outStream ->
+                                    FileInputStream(file).use { inputStream ->
+                                        val buffer = ByteArray(8 * 1024)
+                                        var bytes = inputStream.read(buffer)
+                                        while (bytes >= 0) {
+                                            ensureActive()
+                                            outStream.write(buffer, 0, bytes)
+                                            bytesCopied += bytes
+                                            
+                                            if (totalBytes > 0) {
+                                                val progress = (bytesCopied / totalBytes) * 100
+                                                withContext(Dispatchers.Main) {
+                                                    progressSink?.success(progress)
+                                                }
+                                            }
+                                            
+                                            bytes = inputStream.read(buffer)
+                                        }
+                                    }
+                                }
+                            }
+                            
+                            for (file in files) {
+                                file.delete()
+                            }
+                            oldDir.delete()
+                            
+                            withContext(Dispatchers.Main) {
+                                progressSink?.success(100.0)
+                                result.success(true)
+                            }
+                        } catch (e: CancellationException) {
+                            val files = File(oldPath).listFiles() ?: emptyArray()
+                            for (file in files) {
+                                root.findFile(file.name)?.delete()
+                            }
+                            throw e
+                        } catch (e: Exception) {
+                            withContext(Dispatchers.Main) {
+                                result.error("MIGRATION_FAILED", e.message, e.toString())
+                            }
+                        } finally {
+                            if (migrationJob == coroutineContext[Job]) {
+                                migrationJob = null
+                            }
+                        }
+                    }
+                }
+                "cancelMigration" -> {
+                    migrationJob?.cancel()
+                    result.success(true)
                 }
                 else -> result.notImplemented()
 
