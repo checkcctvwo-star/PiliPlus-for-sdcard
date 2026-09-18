@@ -244,6 +244,7 @@ class MainActivity : AudioServiceActivity() {
                         }
                         runOnUiThread { result.success(null) }
                     }
+                }
                 "deleteSafFile" -> {
                     val uriString = call.argument<String>("uri")
                     if (uriString != null) {
