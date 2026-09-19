@@ -61,7 +61,7 @@ jobs:
       - name: Build Release APKs (split per ABI)
         run: |
           flutter build apk \
-            --debug \
+            --release \
             --split-per-abi \
             --no-pub
 
@@ -82,7 +82,7 @@ jobs:
         shell: bash
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
-          for file in build/app/outputs/flutter-apk/app-*-debug.apk; do
+          for file in build/app/outputs/flutter-apk/app-*-release.apk; do
             abi=$(echo "$file" | sed -E 's|.*app-(.*)-release\.apk|\1|')
             dest="PiliPlus_sdcard_${TAG}_${abi}.apk"
             mv "$file" "$dest"
@@ -117,7 +117,7 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: "PiliPlus SD Card Fix – ${{ steps.tag.outputs.tag }}"
-          prerelease: true
+          prerelease: false
           body: |
             ## PiliPlus SD Card 离线播放修复版
 
