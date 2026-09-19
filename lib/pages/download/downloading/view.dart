@@ -45,6 +45,25 @@ class _DownloadingPageState extends State<DownloadingPage>
         child: SimpleScaffold(
           appBar: MultiSelectAppBarWidget(
             ctr: this,
+            actions: [
+              TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () {
+                  final entries = allChecked.toList();
+                  handleSelect();
+                  for (final entry in entries) {
+                    _downloadService.redownload(entry);
+                  }
+                  SmartDialog.showToast('重新下载该视频');
+                },
+                child: Text(
+                  '重新下载',
+                  style: TextStyle(color: Theme.of(context).colorScheme.onSurface),
+                ),
+              ),
+            ],
             child: AppBar(
               title: const Text('正在缓存'),
               actions: [

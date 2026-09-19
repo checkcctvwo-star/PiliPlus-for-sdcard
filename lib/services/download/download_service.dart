@@ -149,11 +149,33 @@ class DownloadService extends GetxService {
               ..pageDirPath = pageDir.path
               ..entryDirPath = entryDir.path;
             if (entry.isCompleted) {
-              result.add(entry);
+              bool isLocalAndIncomplete = false;
+              if (entry.safFileUris == null && entry.totalBytes > 0 && entry.typeTag != null) {
+                final videoDir = Directory(path.join(entry.entryDirPath, entry.typeTag));
+                if (videoDir.existsSync()) {
+                  final videoFile = File(path.join(videoDir.path, PathUtils.videoNameType2));
+                  final type1File = File(path.join(videoDir.path, PathUtils.videoNameType1));
+                  File? targetFile;
+                  if (videoFile.existsSync()) {
+                    targetFile = videoFile;
+                  } else if (type1File.existsSync()) {
+                    targetFile = type1File;
+                  }
+                  if (targetFile != null && targetFile.lengthSync() < entry.totalBytes) {
+                    isLocalAndIncomplete = true;
+                  }
+                }
+              }
+              if (isLocalAndIncomplete) {
+                entry.isCompleted = false;
+                waitDownloadQueue.add(entry..status = DownloadStatus.wait);
+              } else {
+                result.add(entry);
+              }
             } else {
               waitDownloadQueue.add(entry..status = DownloadStatus.wait);
             }
-          } catch (_) {}
+          } catch (e, st) { print("Error reading entry: $e\n$st"); }
         }
       }
     }
@@ -526,6 +548,7 @@ class DownloadService extends GetxService {
   void _onDone([Object? error]) {
     if (error != null) {
       _updateCurStatus(_downloadManager?.status ?? DownloadStatus.pause);
+      nextDownload();
       return;
     }
 
@@ -557,6 +580,7 @@ class DownloadService extends GetxService {
               ? DownloadStatus.failDownloadAudio
               : status,
         );
+        nextDownload();
       }
     }
   }
@@ -652,9 +676,44 @@ class DownloadService extends GetxService {
   }
 
   void nextDownload() {
-    if (waitDownloadQueue.isNotEmpty) {
-      startDownload(waitDownloadQueue.first);
+    final index = waitDownloadQueue.indexWhere(
+      (e) => e.status == DownloadStatus.wait,
+    );
+    if (index != -1) {
+      startDownload(waitDownloadQueue[index]);
     }
+  }
+
+  Future<void> redownload(BiliDownloadEntryInfo entry) async {
+    if (curDownload.value?.cid == entry.cid) {
+      await cancelDownload(isDelete: true, downloadNext: true);
+    }
+    
+    final typeTag = entry.typeTag;
+    if (typeTag != null) {
+      final videoDir = Directory(path.join(entry.entryDirPath, typeTag));
+      if (videoDir.existsSync()) {
+        try {
+          await videoDir.delete(recursive: true);
+        } catch (e, st) { print("Error reading entry: $e\n$st"); }
+      }
+    }
+    
+    entry.isCompleted = false;
+    entry.downloadedBytes = 0;
+    entry.status = DownloadStatus.wait;
+    entry.safFileUris = null;
+    
+    await _updateBiliDownloadEntryJson(entry);
+    
+    if (downloadList.contains(entry)) {
+      downloadList.remove(entry);
+    }
+    if (!waitDownloadQueue.contains(entry)) {
+      waitDownloadQueue.add(entry);
+    }
+    flagNotifier.refresh();
+    nextDownload();
   }
 
   Future<void> deleteDownload({
@@ -678,7 +737,7 @@ class DownloadService extends GetxService {
       try {
         final res = await const MethodChannel('com.piliplus/download').invokeMethod<bool>('deleteSafFile', {'path': entry.entryDirPath});
         deletedViaSaf = res == true;
-      } catch (_) {}
+      } catch (e, st) { print("Error reading entry: $e\n$st"); }
     }
     
     if (!deletedViaSaf) {
@@ -708,7 +767,7 @@ class DownloadService extends GetxService {
       try {
         final res = await const MethodChannel('com.piliplus/download').invokeMethod<bool>('deleteSafFile', {'path': pageDirPath});
         deletedViaSaf = res == true;
-      } catch (_) {}
+      } catch (e, st) { print("Error reading entry: $e\n$st"); }
     }
     if (!deletedViaSaf) {
       await Directory(pageDirPath).tryDel(recursive: true);

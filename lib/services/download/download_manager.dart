@@ -167,9 +167,34 @@ class DownloadManager {
         cancelToken: _cancelToken,
       );
     } on DioException catch (e) {
-      await onError(e, delete: true);
+      await onError(e, delete: false);
       return;
     }
+
+    if (response.statusCode == 416) {
+      await sink.close();
+      final contentRange = response.headers.value('content-range');
+      int? serverTotal;
+      if (contentRange != null) {
+        final match = RegExp(r'bytes\s+\*/(\d+)').firstMatch(contentRange);
+        if (match != null) {
+          serverTotal = int.tryParse(match.group(1)!);
+        }
+      }
+      
+      if (received > 0 && (serverTotal == null || received >= serverTotal)) {
+        _status = DownloadStatus.completed;
+        onDone();
+        return;
+      }
+      
+      if (file.existsSync()) {
+        await file.tryDel();
+      }
+      await onError(Exception('HTTP 416: Local offset $received invalid. Cache cleared.'), delete: false);
+      return;
+    }
+
     final data = response.data!;
     final contentLength = data.contentLength + received;
 
@@ -189,6 +214,9 @@ class DownloadManager {
         }
       }
       await sink.close();
+      if (contentLength > 0 && received < contentLength) {
+        throw Exception('Download incomplete');
+      }
       _status = DownloadStatus.completed;
       onDone();
     } catch (e) {

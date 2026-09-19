@@ -124,6 +124,23 @@ class _DownloadDetailPageState extends State<DownloadDetailPage>
                   style: TextStyle(color: colorScheme.onSurface),
                 ),
               ),
+              TextButton(
+                style: TextButton.styleFrom(
+                  visualDensity: VisualDensity.compact,
+                ),
+                onPressed: () {
+                  final entries = allChecked.toList();
+                  handleSelect();
+                  for (final entry in entries) {
+                    _downloadService.redownload(entry);
+                  }
+                  SmartDialog.showToast('已加入下载队列');
+                },
+                child: Text(
+                  '重新下载',
+                  style: TextStyle(color: colorScheme.onSurface),
+                ),
+              ),
             ],
             child: AppBar(
               title: Text(widget.title),
