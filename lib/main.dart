@@ -103,13 +103,21 @@ Future<void> _initAppPath() async {
 void main() async {
   ScaledWidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  
+  // IMMEDIATELY render a lightweight splash screen to release the native OS splash screen 
+  // and prevent startup hangs on first launch or heavy DB migrations.
+  runApp(const SplashLoadingApp());
+
   await _initAppPath();
   try {
-    await GStorage.init();
+    await GStorage.init().timeout(const Duration(seconds: 5), onTimeout: () {
+      throw Exception('GStorage.init() timed out after 5 seconds. This is likely due to a background service (like AudioService or Aria) holding the Hive database file lock. Please force stop the app in Android Settings and try again.');
+    });
   } catch (e) {
     await Utils.copyText(e.toString());
     if (kDebugMode) debugPrint('GStorage init error: $e');
-    exit(0);
+    splashErrorNotifier.value = e.toString() + '\n已复制到剪贴板。如果是后台死锁，请到系统设置中强行停止本应用。';
+    return; // Stop initialization, leave SplashLoadingApp on screen with error
   }
   ScaledWidgetsFlutterBinding.instance.scaleFactor = Pref.uiScale;
   await Future.wait([
@@ -408,5 +416,54 @@ class _CustomHttpOverrides extends HttpOverrides {
       client.badCertificateCallback = (cert, host, port) => true;
     }
     return client;
+  }
+}
+
+
+final ValueNotifier<String?> splashErrorNotifier = ValueNotifier<String?>(null);
+
+class SplashLoadingApp extends StatelessWidget {
+  const SplashLoadingApp({super.key});
+  @override
+  Widget build(BuildContext context) {
+    return MaterialApp(
+      home: Scaffold(
+        body: Center(
+          child: ValueListenableBuilder<String?>(
+            valueListenable: splashErrorNotifier,
+            builder: (context, error, child) {
+              if (error != null) {
+                return Padding(
+                  padding: const EdgeInsets.all(32.0),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      const Icon(Icons.error_outline, color: Colors.red, size: 64),
+                      const SizedBox(height: 16),
+                      Text('初始化失败', style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 8),
+                      Text(error, textAlign: TextAlign.center),
+                      const SizedBox(height: 24),
+                      ElevatedButton(
+                        onPressed: () => exit(0),
+                        child: const Text('退出应用并重试'),
+                      ),
+                    ],
+                  ),
+                );
+              }
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: const [
+                  CircularProgressIndicator(),
+                  SizedBox(height: 16),
+                  Text('正在初始化应用...'),
+                ],
+              );
+            },
+          ),
+        ),
+      ),
+    );
   }
 }

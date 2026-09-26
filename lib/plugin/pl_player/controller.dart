@@ -1,6 +1,7 @@
 import 'dart:async' show StreamSubscription, Timer;
 import 'dart:convert' show ascii, utf8;
 import 'dart:io' show Platform;
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'dart:math' show max, min;
 import 'dart:ui' as ui;
 
@@ -1581,6 +1582,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (kDebugMode) {
       debugPrint('dispose player');
     }
+    DownloadManager.clearSafPfds(); // Fix FD leak on Android SAF
     _videoPlayerController?.dispose();
     _videoPlayerController = null;
     _videoController = null;

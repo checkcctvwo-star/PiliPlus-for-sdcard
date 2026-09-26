@@ -265,19 +265,14 @@ class MainActivity : AudioServiceActivity() {
                     } else {
                         result.error("INVALID_ARGS", "uri is null", null)
                     }
-                }
-                "startMigration" -> {
+                }                "startMigration" -> {
                     val oldPath = call.argument<String>("oldPath")
-                    val newUriString = call.argument<String>("newUri")
-                    if (oldPath == null || newUriString == null) {
-                        result.error("INVALID_ARGS", "oldPath or newUri is null", null)
-                        return@setMethodCallHandler
-                    }
-                    
-                    val newUri = Uri.parse(newUriString)
-                    val root = DocumentFile.fromTreeUri(this@MainActivity, newUri)
-                    if (root == null) {
-                        result.error("SAF_INVALID", "cannot resolve new SAF directory", null)
+                    val newPath = call.argument<String>("newPath") ?: call.argument<String>("newUri")
+                    val oldType = call.argument<Int>("oldType") ?: 0
+                    val newType = call.argument<Int>("newType") ?: 0
+
+                    if (oldPath == null || newPath == null) {
+                        result.error("INVALID_ARGS", "oldPath or newPath is null", null)
                         return@setMethodCallHandler
                     }
 
@@ -291,62 +286,95 @@ class MainActivity : AudioServiceActivity() {
                                 return@launch
                             }
                             
-                            val files = oldDir.listFiles() ?: emptyArray()
-                            val totalBytes = files.sumOf { it.length() }.toDouble()
+                            val allFiles = mutableListOf<File>()
+                            fun collectFiles(dir: File) {
+                                val files = dir.listFiles() ?: return
+                                for (f in files) {
+                                    if (f.isDirectory) collectFiles(f)
+                                    else allFiles.add(f)
+                                }
+                            }
+                            collectFiles(oldDir)
+                            
+                            val totalBytes = allFiles.sumOf { it.length() }.toDouble()
                             var bytesCopied = 0.0
 
-                            for (file in files) {
+                            val newRootSaf = if (newType == 2) DocumentFile.fromTreeUri(this@MainActivity, Uri.parse(newPath)) else null
+                            if (newType == 2 && newRootSaf == null) {
+                                throw Exception("cannot resolve new SAF directory")
+                            }
+
+                            for (file in allFiles) {
                                 ensureActive()
-                                if (file.isDirectory) continue
                                 
-                                val fileName = file.name
-                                val mimeType = getMimeTypeFromExtension(fileName)
-                                var newFile = root.findFile(fileName)
-                                if (newFile == null) {
-                                    newFile = root.createFile(mimeType, fileName)
+                                val relPath = file.absolutePath.removePrefix(oldDir.absolutePath).removePrefix("/")
+                                val mimeType = getMimeTypeFromExtension(file.name)
+                                
+                                val outStream = if (newType == 2) {
+                                    var currentSaf = newRootSaf!!
+                                    val parts = relPath.split("/")
+                                    for (i in 0 until parts.size - 1) {
+                                        val part = parts[i]
+                                        var nextSaf = currentSaf.findFile(part)
+                                        if (nextSaf == null) {
+                                            nextSaf = currentSaf.createDirectory(part)
+                                        }
+                                        currentSaf = nextSaf ?: throw Exception("Failed to create SAF dir: \$part")
+                                    }
+                                    val fileName = parts.last()
+                                    var destFileSaf = currentSaf.findFile(fileName)
+                                    if (destFileSaf == null) {
+                                        destFileSaf = currentSaf.createFile(mimeType, fileName)
+                                    }
+                                    contentResolver.openOutputStream(destFileSaf!!.uri) ?: throw Exception("Failed to open SAF stream")
+                                } else {
+                                    val destFile = File(newPath, relPath)
+                                    destFile.parentFile?.mkdirs()
+                                    destFile.outputStream()
                                 }
-                                
-                                if (newFile == null) {
-                                    throw Exception("Could not create file $fileName in SAF directory")
-                                }
-                                
-                                val os = contentResolver.openOutputStream(newFile.uri) ?: throw Exception("Failed to open SAF output stream")
-                                os.use { outStream ->
-                                    FileInputStream(file).use { inputStream ->
-                                        val buffer = ByteArray(8 * 1024)
-                                        var bytes = inputStream.read(buffer)
+
+                                outStream.use { os ->
+                                    FileInputStream(file).use { input ->
+                                        val buffer = ByteArray(256 * 1024)
+                                        var bytes = input.read(buffer)
+                                        var lastTime = System.currentTimeMillis()
                                         while (bytes >= 0) {
                                             ensureActive()
-                                            outStream.write(buffer, 0, bytes)
+                                            os.write(buffer, 0, bytes)
                                             bytesCopied += bytes
                                             
-                                            if (totalBytes > 0) {
-                                                val progress = (bytesCopied / totalBytes) * 100
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastTime > 150 && totalBytes > 0) {
+                                                lastTime = now
                                                 withContext(Dispatchers.Main) {
-                                                    progressSink?.success(progress)
+                                                    progressSink?.success(mapOf(
+                                                        "transferred" to bytesCopied,
+                                                        "total" to totalBytes,
+                                                        "currentFile" to relPath
+                                                    ))
                                                 }
                                             }
-                                            
-                                            bytes = inputStream.read(buffer)
+                                            bytes = input.read(buffer)
                                         }
+                                        os.flush()
                                     }
                                 }
                             }
                             
-                            for (file in files) {
-                                file.delete()
+                            // Delete phase only after success
+                            fun deleteRecursively(f: File) {
+                                if (f.isDirectory) {
+                                    f.listFiles()?.forEach { deleteRecursively(it) }
+                                }
+                                f.delete()
                             }
-                            oldDir.delete()
+                            deleteRecursively(oldDir)
                             
                             withContext(Dispatchers.Main) {
-                                progressSink?.success(100.0)
+                                progressSink?.success(mapOf("transferred" to totalBytes, "total" to totalBytes))
                                 result.success(true)
                             }
                         } catch (e: CancellationException) {
-                            val files = File(oldPath).listFiles() ?: emptyArray()
-                            for (file in files) {
-                                root.findFile(file.name)?.delete()
-                            }
                             throw e
                         } catch (e: Exception) {
                             withContext(Dispatchers.Main) {
@@ -359,6 +387,7 @@ class MainActivity : AudioServiceActivity() {
                         }
                     }
                 }
+
                 "cancelMigration" -> {
                     migrationJob?.cancel()
                     result.success(true)

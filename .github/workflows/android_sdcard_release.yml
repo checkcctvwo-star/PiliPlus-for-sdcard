@@ -73,7 +73,7 @@ jobs:
           if [ -z "$SUFFIX" ]; then
             SUFFIX=$(date +'%Y%m%d-%H%M')
           fi
-          TAG="sdcard-fix-${SUFFIX}"
+          TAG="piliplus-${SUFFIX}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Release tag: ${TAG}"
 
@@ -84,7 +84,7 @@ jobs:
           TAG="${{ steps.tag.outputs.tag }}"
           for file in build/app/outputs/flutter-apk/app-*-release.apk; do
             abi=$(echo "$file" | sed -E 's|.*app-(.*)-release\.apk|\1|')
-            dest="PiliPlus_sdcard_${TAG}_${abi}.apk"
+            dest="piliplus_${TAG}_${abi}.apk"
             mv "$file" "$dest"
             echo "Renamed: $file -> $dest"
           done
@@ -94,21 +94,21 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: PiliPlus-sdcard-arm64-v8a
-          path: PiliPlus_sdcard_*_arm64-v8a.apk
+          path: piliplus_*_arm64-v8a.apk
           retention-days: 90
 
       - name: Upload armeabi-v7a APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: PiliPlus-sdcard-armeabi-v7a
-          path: PiliPlus_sdcard_*_armeabi-v7a.apk
+          path: piliplus_*_armeabi-v7a.apk
           retention-days: 90
 
       - name: Upload x86_64 APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: PiliPlus-sdcard-x86_64
-          path: PiliPlus_sdcard_*_x86_64.apk
+          path: piliplus_*_x86_64.apk
           retention-days: 90
 
       # Create a pre-release on GitHub Releases with all three APKs
@@ -116,7 +116,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: "PiliPlus SD Card Fix – ${{ steps.tag.outputs.tag }}"
+          name: "PiliPlus Formal Release – ${{ steps.tag.outputs.tag }}"
           prerelease: false
           body: |
             ## PiliPlus SD Card 离线播放修复版
@@ -143,4 +143,4 @@ jobs:
             > 如已安装官方版或其他签名的版本，需先卸载再安装。
 
             **构建来源 commit：** `${{ github.sha }}`
-          files: PiliPlus_sdcard_*.apk
+          files: piliplus_*.apk

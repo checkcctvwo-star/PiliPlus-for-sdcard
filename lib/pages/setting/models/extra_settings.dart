@@ -1279,8 +1279,11 @@ Future<void> _handleMigration(BuildContext context, VoidCallback setState, Strin
   
   // Start migration async
   final migrationFuture = const MethodChannel('com.piliplus/download').invokeMethod('startMigration', {
-    'newPath': newPath,
     'oldPath': downloadPath,
+    'newPath': newPath,
+    'newUri': newPath,
+    'oldType': GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0),
+    'newType': dirType,
   });
 
   // show progress dialog
@@ -1368,9 +1371,11 @@ Future<void> _handleMigration(BuildContext context, VoidCallback setState, Strin
     GStorage.setting.put(SettingBoxKey.downloadPath, newPath);
   }
   
-  try {
-    await const MethodChannel('com.piliplus/download').invokeMethod<void>('clearCustomDirectory');
-  } catch (_) {}
+  if (dirType != 2) {
+    try {
+      await const MethodChannel('com.piliplus/download').invokeMethod<void>('clearCustomDirectory');
+    } catch (_) {}
+  }
   
   setState();
   Get.find<DownloadService>().initDownloadList();

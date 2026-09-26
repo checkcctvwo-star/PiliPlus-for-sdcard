@@ -5,6 +5,8 @@ import 'dart:io' show Directory, File, Platform;
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/download.dart';
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/plugin/pl_player/controller.dart';
+import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/models_new/download/bili_download_media_file_info.dart';
@@ -167,10 +169,20 @@ class DownloadService extends GetxService {
                 }
               }
               if (isLocalAndIncomplete) {
-                entry.isCompleted = false;
-                waitDownloadQueue.add(entry..status = DownloadStatus.wait);
-              } else {
+                entry.isCompleted = true; // Keep in UI list so user can manage it
+                entry.status = DownloadStatus.corrupted;
                 result.add(entry);
+              } else {
+                entry.status = DownloadStatus.completed;
+                result.add(entry);
+                if (entry.safFileUris == null) {
+                  Future.microtask(() async {
+                    await _migrateToSafIfNeeded(entry);
+                    if (entry.safFileUris != null) {
+                      await _updateBiliDownloadEntryJson(entry);
+                    }
+                  });
+                }
               }
             } else {
               waitDownloadQueue.add(entry..status = DownloadStatus.wait);
@@ -628,6 +640,9 @@ class DownloadService extends GetxService {
     final videoDir = Directory(path.join(entry.entryDirPath, typeTag));
     if (!videoDir.existsSync()) return;
 
+    await videoPlayerServiceHandler?.stop();
+    await PlPlayerController.instance?.videoPlayerController?.stop();
+
     final artifacts = <String>[];
     final single = File(path.join(videoDir.path, PathUtils.videoNameType1));
     if (single.existsSync()) {
@@ -723,15 +738,17 @@ class DownloadService extends GetxService {
     bool refresh = true,
     bool downloadNext = true,
   }) async {
-    if (removeList) {
-      downloadList.remove(entry);
-    }
-    if (removeQueue) {
-      waitDownloadQueue.remove(entry);
-    }
     if (curDownload.value?.cid == entry.cid) {
       await cancelDownload(isDelete: true, downloadNext: downloadNext);
     }
+    
+    // Mark as deleting
+    entry.status = DownloadStatus.pause; 
+    flagNotifier.refresh();
+
+    await videoPlayerServiceHandler?.stop();
+    await PlPlayerController.instance?.videoPlayerController?.stop();
+
     bool deletedViaSaf = false;
     if (Platform.isAndroid) {
       try {
@@ -740,19 +757,35 @@ class DownloadService extends GetxService {
       } catch (e, st) { print("Error reading entry: $e\n$st"); }
     }
     
+    bool deleted = true;
     if (!deletedViaSaf) {
       final downloadDir = Directory(entry.pageDirPath);
       if (downloadDir.existsSync()) {
         if (!await downloadDir.lengthGte(2)) {
           await downloadDir.tryDel(recursive: true);
+          deleted = !downloadDir.existsSync();
         } else {
           final entryDir = Directory(entry.entryDirPath);
           if (entryDir.existsSync()) {
             await entryDir.tryDel(recursive: true);
+            deleted = !entryDir.existsSync();
           }
         }
       }
     }
+    
+    // Only remove from UI if actually deleted from disk (or if it was already missing)
+    if (deleted || deletedViaSaf) {
+      if (removeList) {
+        downloadList.remove(entry);
+      }
+      if (removeQueue) {
+        waitDownloadQueue.remove(entry);
+      }
+    } else {
+      entry.status = DownloadStatus.failDownload; // Mark as failed so user knows
+    }
+    
     if (refresh) {
       flagNotifier.refresh();
     }
@@ -762,6 +795,9 @@ class DownloadService extends GetxService {
     required String pageDirPath,
     bool refresh = true,
   }) async {
+    await videoPlayerServiceHandler?.stop();
+    await PlPlayerController.instance?.videoPlayerController?.stop();
+
     bool deletedViaSaf = false;
     if (Platform.isAndroid) {
       try {
@@ -769,10 +805,17 @@ class DownloadService extends GetxService {
         deletedViaSaf = res == true;
       } catch (e, st) { print("Error reading entry: $e\n$st"); }
     }
+    bool success = true;
     if (!deletedViaSaf) {
-      await Directory(pageDirPath).tryDel(recursive: true);
+      final dir = Directory(pageDirPath);
+      await dir.tryDel(recursive: true);
+      success = !dir.existsSync();
     }
-    downloadList.removeWhere((e) => e.pageDirPath == pageDirPath);
+    
+    if (success || deletedViaSaf) {
+      downloadList.removeWhere((e) => e.pageDirPath == pageDirPath);
+    }
+    
     if (refresh) {
       flagNotifier.refresh();
     }

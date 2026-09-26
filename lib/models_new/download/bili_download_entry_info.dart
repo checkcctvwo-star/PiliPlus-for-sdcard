@@ -437,6 +437,7 @@ enum DownloadStatus {
   failPlayUrl('获取播放地址失败'),
   pause('暂停中'),
   wait('等待中'),
+  corrupted('文件已损坏'),
   ;
 
   final String message;
