@@ -86,6 +86,24 @@ class MainActivity : AudioServiceActivity() {
                     }
                     result.success(true)
                 }
+                "getUnfinishedTasks" -> {
+                    val notComplete = Aria.download(this).allNotCompleteTask
+                    val resultList = mutableListOf<Map<String, Any?>>()
+                    if (notComplete != null) {
+                        for (task in notComplete) {
+                            val map = mapOf(
+                                "id" to task.id,
+                                "filePath" to task.filePath,
+                                "currentProgress" to task.currentProgress,
+                                "fileSize" to task.fileSize,
+                                "state" to task.state,
+                                "extendField" to task.extendField
+                            )
+                            resultList.add(map)
+                        }
+                    }
+                    result.success(resultList)
+                }
                 "getExternalSDCardPath" -> {
                     val externalDirs = getExternalFilesDirs(null)
                     if (externalDirs.size > 1 && externalDirs[1] != null) {

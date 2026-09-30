@@ -47,12 +47,30 @@ class DownloadManager {
     }
   }
 
+  static Future<void> stopAll() async {
+    try {
+      await _channel.invokeMethod('pauseAll');
+    } catch (e) {
+      // error handling
+    }
+  }
+
   static Future<void> resumeAll() async {
     try {
       await _channel.invokeMethod('resumeAll');
     } catch (e) {
       // error handling
     }
+  }
+
+  static Future<List<Map<String, dynamic>>> getUnfinishedTasks() async {
+    try {
+      final List<dynamic>? result = await _channel.invokeListMethod<dynamic>('getUnfinishedTasks');
+      if (result != null) {
+        return result.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+    return [];
   }
 
   /// Copies a finished download artifact into the user-selected SAF directory.

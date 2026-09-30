@@ -5,6 +5,7 @@ import 'dart:io' show Directory, File, Platform;
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/download.dart';
 import 'package:PiliPlus/http/init.dart';
+import 'package:collection/collection.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/services/service_locator.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
@@ -156,6 +157,27 @@ class DownloadService extends GetxService {
     waitForInitialization = () async {
       await DownloadManager.init();
       await _readDownloadList();
+      final unfinishedTasks = await DownloadManager.getUnfinishedTasks();
+      for (final task in unfinishedTasks) {
+        final filePath = task['filePath'] as String?;
+        if (filePath == null) continue;
+        
+        final match = downloadList.firstWhereOrNull((e) {
+          if (e.safFileUris != null) return false;
+          final typeTag = e.typeTag;
+          if (typeTag == null) return false;
+          final videoPath1 = path.join(e.entryDirPath, typeTag, PathUtils.videoNameType1);
+          final videoPath2 = path.join(e.entryDirPath, typeTag, PathUtils.videoNameType2);
+          final audioPath = path.join(e.entryDirPath, typeTag, PathUtils.audioNameType2);
+          return filePath == videoPath1 || filePath == videoPath2 || filePath == audioPath;
+        });
+        
+        if (match != null && !waitDownloadQueue.contains(match)) {
+          match.status = DownloadStatus.pause;
+          match.downloadedBytes = (task['currentProgress'] as num?)?.toInt() ?? match.downloadedBytes;
+          waitDownloadQueue.add(match);
+        }
+      }
     }();
   }
 
@@ -749,7 +771,7 @@ class DownloadService extends GetxService {
   Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) async {
     final entryJsonFile = File(path.join(entry.entryDirPath, _entryFile));
     final tempFile = File('${entryJsonFile.path}.tmp');
-    await tempFile.writeAsString(jsonEncode(entry.toJson()));
+    await tempFile.writeAsString(jsonEncode(entry.toJson()), flush: true);
     tempFile.renameSync(entryJsonFile.path);
   }
 
