@@ -41,6 +41,14 @@ class _DownloadPageState extends State<DownloadPage> with GridMixin {
   final _progress = ChangeNotifier();
 
   @override
+  void initState() {
+    super.initState();
+    Future.microtask(() {
+      _downloadService.deepScanRecovery();
+    });
+  }
+
+  @override
   void dispose() {
     _progress.dispose();
     super.dispose();
@@ -129,6 +137,16 @@ class _DownloadPageState extends State<DownloadPage> with GridMixin {
                     Get.to(DownloadSearchPage(progress: _progress));
                   },
                   icon: const Icon(Icons.search),
+                ),
+                IconButton(
+                  tooltip: '深度恢复',
+                  onPressed: () async {
+                    SmartDialog.showLoading(msg: '深度扫描中...');
+                    await _downloadService.deepScanRecovery();
+                    SmartDialog.dismiss();
+                    SmartDialog.showToast('扫描完成');
+                  },
+                  icon: const Icon(Icons.document_scanner),
                 ),
                 IconButton(
                   tooltip: '多选',

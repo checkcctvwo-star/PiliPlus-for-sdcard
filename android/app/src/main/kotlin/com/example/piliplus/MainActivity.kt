@@ -265,7 +265,25 @@ class MainActivity : AudioServiceActivity() {
                     } else {
                         result.error("INVALID_ARGS", "uri is null", null)
                     }
-                }                "startMigration" -> {
+                }
+                "scanSafDirectory" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString == null) {
+                        result.error("INVALID_ARGS", "uri is null", null)
+                        return@setMethodCallHandler
+                    }
+                    safExecutor.execute {
+                        try {
+                            val uri = Uri.parse(uriString)
+                            val root = DocumentFile.fromTreeUri(this@MainActivity, uri)
+                            val dirNames = root?.listFiles()?.filter { it.isDirectory }?.mapNotNull { it.name } ?: emptyList()
+                            runOnUiThread { result.success(dirNames) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SCAN_FAILED", e.message, e.toString()) }
+                        }
+                    }
+                }
+                "startMigration" -> {
                     val oldPath = call.argument<String>("oldPath")
                     val newPath = call.argument<String>("newPath") ?: call.argument<String>("newUri")
                     val oldType = call.argument<Int>("oldType") ?: 0

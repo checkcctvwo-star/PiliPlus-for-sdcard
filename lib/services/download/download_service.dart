@@ -120,6 +120,169 @@ class DownloadService extends GetxService {
     }();
   }
 
+  Future<void> deepScanRecovery() async {
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+    final safUri = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+
+    final folders = <String>{};
+    final downloadPathStr = await _getDownloadPath();
+    final localDir = Directory(downloadPathStr);
+
+    if (localDir.existsSync()) {
+      await for (final dir in localDir.list()) {
+        if (dir is Directory) {
+          folders.add(path.basename(dir.path));
+        }
+      }
+    }
+
+    if (type == 2 && safUri != null && safUri.isNotEmpty && Platform.isAndroid) {
+      try {
+        final List<dynamic>? safDirs = await const MethodChannel('com.piliplus/download')
+            .invokeListMethod<String>('scanSafDirectory', {'uri': safUri});
+        if (safDirs != null) {
+          folders.addAll(safDirs.cast<String>());
+        }
+      } catch (e) {
+        debugPrint('SAF deep scan error: $e');
+      }
+    }
+
+    for (final avidStr in folders) {
+      if (avidStr.startsWith('s_')) continue; // skip bangumi for now
+      final avidPath = path.join(downloadPathStr, avidStr);
+      final dir = Directory(avidPath);
+      if (!dir.existsSync()) continue;
+
+      await for (final cDir in dir.list()) {
+        if (cDir is Directory) {
+          final entryFile = File(path.join(cDir.path, _entryFile));
+          if (!entryFile.existsSync()) {
+            String? typeTag;
+            await for (final typeDir in cDir.list()) {
+              if (typeDir is Directory) {
+                final potentialIndex = File(path.join(typeDir.path, _indexFile));
+                if (potentialIndex.existsSync()) {
+                  typeTag = path.basename(typeDir.path);
+                  break;
+                }
+              }
+            }
+            if (typeTag != null) {
+              try {
+                final res = await Request.dio.get('https://api.bilibili.com/x/web-interface/view?aid=$avidStr');
+                final data = res.data['data'];
+                if (data != null) {
+                  final title = data['title'] ?? 'Unknown';
+                  final pic = data['pic'] ?? '';
+                  final owner = data['owner']?['name'] ?? 'Unknown';
+                  final bvid = data['bvid'] ?? '';
+                  final cidStr = path.basename(cDir.path).replaceFirst('c_', '');
+                  final cid = int.tryParse(cidStr) ?? 0;
+                  int pageNum = 1;
+                  String partName = title;
+                  final pages = data['pages'];
+                  if (pages is List) {
+                    for (final p in pages) {
+                      if (p['cid'] == cid) {
+                        pageNum = p['page'] ?? 1;
+                        partName = p['part'] ?? title;
+                        break;
+                      }
+                    }
+                  }
+
+                  final pageData = PageInfo(
+                    cid: cid,
+                    page: pageNum,
+                    hasAlias: false,
+                    tid: 0,
+                    part: partName,
+                    downloadTitle: '视频已缓存完成',
+                    downloadSubtitle: title,
+                  );
+
+                  final entry = BiliDownloadEntryInfo(
+                    mediaType: 2,
+                    hasDashAudio: false,
+                    isCompleted: false,
+                    totalBytes: 0,
+                    downloadedBytes: 0,
+                    title: title,
+                    typeTag: typeTag,
+                    cover: pic,
+                    preferedVideoQuality: int.tryParse(typeTag) ?? 16,
+                    qualityPithyDescription: '',
+                    guessedTotalBytes: 0,
+                    totalTimeMilli: 0,
+                    danmakuCount: 0,
+                    timeUpdateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                    timeCreateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                    canPlayInAdvance: true,
+                    interruptTransformTempFile: false,
+                    spid: 0,
+                    bvid: bvid,
+                    avid: int.tryParse(avidStr) ?? 0,
+                    ownerName: owner,
+                    pageData: pageData,
+                  )
+                    ..pageDirPath = dir.path
+                    ..entryDirPath = cDir.path;
+
+                  await _updateBiliDownloadEntryJson(entry);
+                }
+              } catch (e) {
+                debugPrint('API reconstruction error: $e');
+              }
+            }
+          }
+
+          if (entryFile.existsSync()) {
+            try {
+              final entryJson = await entryFile.readAsString();
+              final entry = BiliDownloadEntryInfo.fromJson(jsonDecode(entryJson))
+                ..pageDirPath = dir.path
+                ..entryDirPath = cDir.path;
+
+              final tag = entry.typeTag;
+              if (tag != null) {
+                final typeDir = Directory(path.join(cDir.path, tag));
+                if (typeDir.existsSync()) {
+                  final videoFile = File(path.join(typeDir.path, PathUtils.videoNameType2));
+                  final audioFile = File(path.join(typeDir.path, PathUtils.audioNameType2));
+                  final type1File = File(path.join(typeDir.path, PathUtils.videoNameType1));
+
+                  int actualBytes = 0;
+                  if (videoFile.existsSync()) actualBytes += videoFile.lengthSync();
+                  if (audioFile.existsSync()) actualBytes += audioFile.lengthSync();
+                  if (type1File.existsSync()) actualBytes += type1File.lengthSync();
+
+                  if (entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
+                    entry.isCompleted = false;
+                    entry.status = DownloadStatus.wait;
+                    await _updateBiliDownloadEntryJson(entry);
+                    if (!waitDownloadQueue.contains(entry)) {
+                      waitDownloadQueue.add(entry);
+                    }
+                  }
+                }
+              }
+            } catch (e) {
+              debugPrint('Integrity check error: $e');
+            }
+          }
+        }
+      }
+    }
+
+    await _readDownloadList();
+    waitDownloadQueue.refresh();
+    flagNotifier.refresh();
+  }
+
   Future<void> _readDownloadList() async {
     downloadList.clear();
     final downloadDir = Directory(await _getDownloadPath());
@@ -538,9 +701,11 @@ class DownloadService extends GetxService {
     }
   }
 
-  Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) {
+  Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) async {
     final entryJsonFile = File(path.join(entry.entryDirPath, _entryFile));
-    return entryJsonFile.writeAsString(jsonEncode(entry.toJson()));
+    final tempFile = File('${entryJsonFile.path}.tmp');
+    await tempFile.writeAsString(jsonEncode(entry.toJson()));
+    tempFile.renameSync(entryJsonFile.path);
   }
 
   void _onReceive(int progress, int total) {
