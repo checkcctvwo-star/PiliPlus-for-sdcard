@@ -158,6 +158,8 @@ abstract final class SettingBoxKey {
       enableDocProvider = 'enableDocProvider',
       downloadDirType = 'downloadDirType',
       allowCellularDownload = 'allowCellularDownload',
+      autoResumeDownloads = 'autoResumeDownloads',
+      autoResumeDownloads = 'autoResumeDownloads',
       enableEmoteTooltip = 'enableEmoteTooltip';
 
   static const String minimizeOnExit = 'minimizeOnExit',

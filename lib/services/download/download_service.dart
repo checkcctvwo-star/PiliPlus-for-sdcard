@@ -24,6 +24,8 @@ import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show MethodChannel;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -64,53 +66,104 @@ class DownloadService extends GetxService {
   final _isBatchProcessing = false.obs;
   bool get isBatchProcessing => _isBatchProcessing.value;
 
-  Future<void> toggleAllTasks() async {
+  Future<void> pauseAllTasks() async {
+    if (curDownload.value != null &&
+        curDownload.value!.status.isDownloading) {
+      curDownload.value!.status = DownloadStatus.pause;
+      curDownload.refresh();
+    }
+    for (var item in waitDownloadQueue) {
+      if (item.status == DownloadStatus.wait || item.status.isDownloading) {
+        item.status = DownloadStatus.pause;
+      }
+    }
+    waitDownloadQueue.refresh();
+
+    await cancelDownload(isDelete: false, downloadNext: false);
+    await DownloadManager.pauseDownload();
+  }
+
+  Future<void> resumeAllTasks() async {
+    for (var item in waitDownloadQueue) {
+      if (item.status == DownloadStatus.pause ||
+          item.status == DownloadStatus.failDownload) {
+        item.status = DownloadStatus.wait;
+      }
+    }
+    waitDownloadQueue.refresh();
+
+    nextDownload();
+    await DownloadManager.resumeAll();
+  }
+
+  
+  Future<void> resumeAllTasks() async {
     if (_isBatchProcessing.value) return;
     _isBatchProcessing.value = true;
-
     try {
-      bool hasActiveTask =
-          curDownload.value?.status.isDownloading == true ||
-          waitDownloadQueue.any(
-            (e) => e.status == DownloadStatus.wait || e.status.isDownloading,
-          );
-
-      if (hasActiveTask) {
-        if (curDownload.value != null &&
-            curDownload.value!.status.isDownloading) {
-          curDownload.value!.status = DownloadStatus.pause;
-          curDownload.refresh();
+      for (var item in waitDownloadQueue) {
+        if (item.status == DownloadStatus.pause ||
+            item.status == DownloadStatus.failDownload) {
+          item.status = DownloadStatus.wait;
         }
-        for (var item in waitDownloadQueue) {
-          if (item.status == DownloadStatus.wait || item.status.isDownloading) {
-            item.status = DownloadStatus.pause;
-          }
-        }
-        waitDownloadQueue.refresh();
-
-        await cancelDownload(isDelete: false, downloadNext: false);
-        await DownloadManager.pauseDownload();
-      } else {
-        for (var item in waitDownloadQueue) {
-          if (item.status == DownloadStatus.pause ||
-              item.status == DownloadStatus.failDownload) {
-            item.status = DownloadStatus.wait;
-          }
-        }
-        waitDownloadQueue.refresh();
-
-        nextDownload();
-        await DownloadManager.resumeAll();
       }
+      waitDownloadQueue.refresh();
+      nextDownload();
+      await DownloadManager.resumeAll();
     } finally {
       _isBatchProcessing.value = false;
     }
   }
 
+  Future<void> toggleAllTasks() async {
+    if (_isBatchProcessing.value) return;
+
+    if (waitDownloadQueue.any((e) =>
+        e.status == DownloadStatus.downloading ||
+        e.status == DownloadStatus.wait)) {
+      _isBatchProcessing.value = true;
+      try {
+        pauseAllTasks();
+        await DownloadManager.stopAll();
+      } finally {
+        _isBatchProcessing.value = false;
+      }
+    } else {
+      await resumeAllTasks();
+    }
+  }
+
+
+  late StreamSubscription<List<ConnectivityResult>> _connectivitySubscription;
+
   @override
   void onInit() {
     super.onInit();
     initDownloadList();
+    
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((results) {
+      if (results.isEmpty) return;
+      final result = results.first; // handle single result or first of list
+      if (result == ConnectivityResult.wifi || result == ConnectivityResult.ethernet) {
+        if (GStorage.setting.get(SettingBoxKey.autoResumeDownloads, defaultValue: true)) {
+          resumeAllTasks();
+        }
+      } else if (result == ConnectivityResult.mobile) {
+        if (GStorage.setting.get(SettingBoxKey.autoResumeDownloads, defaultValue: true)) {
+          if (Pref.allowCellularDownload) {
+            resumeAllTasks();
+          } else {
+            pauseAllTasks();
+          }
+        }
+      }
+    });
+  }
+
+  @override
+  void onClose() {
+    _connectivitySubscription.cancel();
+    super.onClose();
   }
 
   void initDownloadList() {

@@ -101,6 +101,19 @@ List<SettingsModel> get extraSettings => [
       },
       onTap: _showAndroidDownPathDialog,
     ),
+  SwitchModel(
+    title: '允许使用移动网络下载',
+    leading: const Icon(Icons.network_cell),
+    setKey: SettingBoxKey.allowCellularDownload,
+    defaultVal: false,
+  ),
+  SwitchModel(
+    title: '自动恢复下载',
+    subtitle: '进入离线缓存或连接WiFi时自动恢复下载',
+    leading: const Icon(Icons.autorenew),
+    setKey: SettingBoxKey.autoResumeDownloads,
+    defaultVal: true,
+  ),
   SplitModel(
     normalModel: const NormalModel.split(
       title: '空降助手',

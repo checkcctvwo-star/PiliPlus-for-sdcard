@@ -6,6 +6,9 @@ import 'package:PiliPlus/pages/common/multi_select/base.dart'
     show BaseMultiSelectMixin;
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
+import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/widgets.dart' show Text;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -22,11 +25,33 @@ class DownloadPageController extends GetxController
   @override
   RxList<DownloadPageInfo> get state => pages;
 
+  
   @override
   void onInit() {
     super.onInit();
     _loadList();
     _downloadService.flagNotifier.add(_loadList);
+    
+    final autoResume = GStorage.setting.get(SettingBoxKey.autoResumeDownloads, defaultValue: true) as bool;
+    if (autoResume) {
+      _downloadService.resumeAllTasks();
+    }
+  }
+
+
+  Future<void> _checkResume() async {
+    if (GStorage.setting.get(SettingBoxKey.autoResumeDownloads, defaultValue: true)) {
+      final results = await Connectivity().checkConnectivity();
+      if (results.isEmpty) return;
+      final result = results.first;
+      if (result == ConnectivityResult.wifi || result == ConnectivityResult.ethernet) {
+        _downloadService.resumeAllTasks();
+      } else if (result == ConnectivityResult.mobile) {
+        if (Pref.allowCellularDownload) {
+          _downloadService.resumeAllTasks();
+        }
+      }
+    }
   }
 
   @override
