@@ -255,13 +255,13 @@ class BiliDownloadEntryInfo with MultiSelectData {
       return true;
     }
     if (other is BiliDownloadEntryInfo) {
-      return cid == other.cid;
+      return avid == other.avid && cid == other.cid;
     }
     return false;
   }
 
   @override
-  int get hashCode => cid.hashCode;
+  int get hashCode => Object.hash(avid, cid);
 }
 
 class PageInfo {

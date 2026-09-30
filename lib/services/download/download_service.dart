@@ -121,6 +121,7 @@ class DownloadService extends GetxService {
   }
 
   Future<void> deepScanRecovery() async {
+    final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue];
     final type = GStorage.setting.get(
       SettingBoxKey.downloadDirType,
       defaultValue: 0,
@@ -264,9 +265,7 @@ class DownloadService extends GetxService {
                     entry.isCompleted = false;
                     entry.status = DownloadStatus.wait;
                     await _updateBiliDownloadEntryJson(entry);
-                    if (!waitDownloadQueue.contains(entry)) {
-                      waitDownloadQueue.add(entry);
-                    }
+                    tempWaitQueue.add(entry);
                   }
                 }
               }
@@ -277,6 +276,7 @@ class DownloadService extends GetxService {
         }
       }
     }
+    waitDownloadQueue.assignAll(tempWaitQueue.toSet().toList());
 
     await _readDownloadList();
     waitDownloadQueue.refresh();
@@ -285,18 +285,21 @@ class DownloadService extends GetxService {
 
   Future<void> _readDownloadList() async {
     downloadList.clear();
+    final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue];
     final downloadDir = Directory(await _getDownloadPath());
     await for (final dir in downloadDir.list()) {
       if (dir is Directory) {
-        downloadList.addAll(await _readDownloadDirectory(dir));
+        downloadList.addAll(await _readDownloadDirectory(dir, tempWaitQueue));
       }
     }
+    waitDownloadQueue.assignAll(tempWaitQueue.toSet().toList());
     downloadList.sort((a, b) => b.timeUpdateStamp.compareTo(a.timeUpdateStamp));
   }
 
   @pragma('vm:notify-debugger-on-exception')
   Future<List<BiliDownloadEntryInfo>> _readDownloadDirectory(
     Directory pageDir,
+    List<BiliDownloadEntryInfo> tempWaitQueue,
   ) async {
     final result = <BiliDownloadEntryInfo>[];
 
@@ -348,7 +351,7 @@ class DownloadService extends GetxService {
                 }
               }
             } else {
-              waitDownloadQueue.add(entry..status = DownloadStatus.wait);
+              tempWaitQueue.add(entry..status = DownloadStatus.wait);
             }
           } catch (e, st) { print("Error reading entry: $e\n$st"); }
         }
@@ -492,7 +495,10 @@ class DownloadService extends GetxService {
       ..pageDirPath = entryDir.parent.path
       ..entryDirPath = entryDir.path
       ..status = DownloadStatus.wait;
-    waitDownloadQueue.add(entry);
+      
+    final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue, entry];
+    waitDownloadQueue.assignAll(tempWaitQueue.toSet().toList());
+    
     if (curDownload.value?.status.isDownloading != true &&
         !_isBatchProcessing.value) {
       startDownload(entry);
