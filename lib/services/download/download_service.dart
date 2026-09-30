@@ -84,20 +84,6 @@ class DownloadService extends GetxService {
   }
 
   Future<void> resumeAllTasks() async {
-    for (var item in waitDownloadQueue) {
-      if (item.status == DownloadStatus.pause ||
-          item.status == DownloadStatus.failDownload) {
-        item.status = DownloadStatus.wait;
-      }
-    }
-    waitDownloadQueue.refresh();
-
-    nextDownload();
-    await DownloadManager.resumeAll();
-  }
-
-  
-  Future<void> resumeAllTasks() async {
     if (_isBatchProcessing.value) return;
     _isBatchProcessing.value = true;
     try {
