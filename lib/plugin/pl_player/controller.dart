@@ -802,13 +802,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
     String video = dataSource.videoSource;
     if (isFileSource) {
-      video = Get.find<LocalProxyServer>().getProxyUrl(video);
+      video = await Get.find<LocalProxyServer>().getProxyUrlAsync(video);
     }
     
     if (dataSource.audioSource case final audioSrc? when (audioSrc.isNotEmpty)) {
       String audio = audioSrc;
       if (isFileSource) {
-        audio = Get.find<LocalProxyServer>().getProxyUrl(audioSrc);
+        audio = await Get.find<LocalProxyServer>().getProxyUrlAsync(audioSrc);
       }
       
       if (onlyPlayAudio.value) {

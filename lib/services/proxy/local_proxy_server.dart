@@ -24,7 +24,7 @@ class LocalProxyServer extends GetxService {
   Future<void> start() async {
     if (_server != null) return;
     _server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
-    _server!.listen(_handleRequest);
+    _server!.listen(_handleRequest, onError: (e) => print("LocalProxyServer stream error: $e"));
   }
 
   /// Stop the server.
@@ -34,6 +34,28 @@ class LocalProxyServer extends GetxService {
   }
 
   /// Get the proxy URL for a given local file path.
+  
+  Future<void> ensureServerRunning() async {
+    if (!isRunning) {
+      await start();
+    } else {
+      try {
+        final request = await HttpClient().get('127.0.0.1', port, '/ping').timeout(const Duration(milliseconds: 500));
+        final response = await request.close();
+        if (response.statusCode != HttpStatus.ok) throw Exception('bad status');
+      } catch (_) {
+        await stop();
+        await start();
+      }
+    }
+  }
+
+  Future<String> getProxyUrlAsync(String filePath) async {
+    await ensureServerRunning();
+    final encodedPath = Uri.encodeComponent(filePath);
+    return 'http://127.0.0.1:$port/stream?path=$encodedPath';
+  }
+
   String getProxyUrl(String filePath) {
     if (!isRunning) {
       throw StateError('Proxy server is not running');
@@ -42,33 +64,36 @@ class LocalProxyServer extends GetxService {
     return 'http://127.0.0.1:$port/stream?path=$encodedPath';
   }
 
+  
   Future<void> _handleRequest(HttpRequest request) async {
     final response = request.response;
     try {
+      if (request.uri.path == '/ping') {
+        response.statusCode = HttpStatus.ok;
+        response.write('pong');
+        return;
+      }
+      
       if (request.uri.path != '/stream') {
         response.statusCode = HttpStatus.notFound;
-        await response.close();
         return;
       }
 
       final filePath = request.uri.queryParameters['path'];
       if (filePath == null || filePath.isEmpty) {
         response.statusCode = HttpStatus.badRequest;
-        await response.close();
         return;
       }
 
       final file = File(filePath);
       if (!await file.exists()) {
         response.statusCode = HttpStatus.notFound;
-        await response.close();
         return;
       }
 
       final fileStat = await file.stat();
       final fileSize = fileStat.size;
 
-      // Determine MIME type
       final mimeType = lookupMimeType(filePath) ?? 'application/octet-stream';
       response.headers.contentType = ContentType.parse(mimeType);
       response.headers.set('Accept-Ranges', 'bytes');
@@ -80,18 +105,13 @@ class LocalProxyServer extends GetxService {
       if (rangeHeader != null && rangeHeader.startsWith('bytes=')) {
         final parts = rangeHeader.substring(6).split('-');
         if (parts.isNotEmpty) {
-          if (parts[0].isNotEmpty) {
-            start = int.parse(parts[0]);
-          }
-          if (parts.length > 1 && parts[1].isNotEmpty) {
-            end = int.parse(parts[1]);
-          }
+          if (parts[0].isNotEmpty) start = int.parse(parts[0]);
+          if (parts.length > 1 && parts[1].isNotEmpty) end = int.parse(parts[1]);
         }
         
         if (start >= fileSize || end >= fileSize || start > end) {
           response.statusCode = HttpStatus.requestedRangeNotSatisfiable;
           response.headers.set('Content-Range', 'bytes */$fileSize');
-          await response.close();
           return;
         }
 
@@ -105,12 +125,19 @@ class LocalProxyServer extends GetxService {
       response.headers.contentLength = contentLength;
 
       await response.addStream(file.openRead(start, end + 1));
+    } on SocketException catch (_) {
+      // Ignore broken pipe errors when the player closes the connection early
     } catch (e) {
-      if (request.response.connectionInfo != null) {
-        response.statusCode = HttpStatus.internalServerError;
-      }
+      try {
+        if (request.response.connectionInfo != null) {
+          response.statusCode = HttpStatus.internalServerError;
+        }
+      } catch (_) {}
     } finally {
-      await response.close();
+      try {
+        await response.close();
+      } catch (_) {}
     }
   }
+
 }
