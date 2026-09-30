@@ -97,7 +97,7 @@ class MainActivity : AudioServiceActivity() {
                                 "currentProgress" to task.currentProgress,
                                 "fileSize" to task.fileSize,
                                 "state" to task.state,
-                                "extendField" to task.extendField
+                                "extendField" to task.str
                             )
                             resultList.add(map)
                         }
