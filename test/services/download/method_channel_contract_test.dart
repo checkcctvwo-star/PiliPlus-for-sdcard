@@ -189,6 +189,14 @@ void main() {
       );
       final args = buildArgsFor('scanSafDirectory', keys);
       kotlin.scanSafDirectoryFixture = ['123', '456'];
+      // Give the recursive payload real content. The previous version left this
+      // empty, so `result?['files']` was an empty map and the assertion below
+      // verified nothing at all.
+      kotlin.scanSafFilesFixture = {
+        '123/c_0/video.m4s': 1024,
+        '456/c_1/entry.json': 7,
+      };
+      kotlin.scanSafScannedAtFixture = 1735689600000;
 
       // Structured payload, not a bare name list: the scan plan needs the
       // directory names *and* the recursive file listing, because a name alone
@@ -198,8 +206,20 @@ void main() {
               .invokeMapMethod<String, dynamic>('scanSafDirectory', args);
 
       expect(result?['dirs'], ['123', '456']);
-      expect(result?['files'], isA<Map<String, dynamic>>());
-      expect(result?['scannedAt'], isA<int>());
+      expect(result?['scannedAt'], 1735689600000);
+
+      // StandardMethodCodec decodes a nested map as Map<Object?, Object?>:
+      // the type arguments are erased on the wire, so
+      // `isA<Map<String, dynamic>>()` can never hold across a real channel,
+      // no matter what the native side sends. Assert what is actually
+      // observable on the channel — and what production genuinely relies on —
+      // which is stronger than the original empty-fixture type check.
+      final files = result?['files'];
+      expect(files, isA<Map<Object?, Object?>>());
+      expect((files as Map).cast<String, int>(), {
+        '123/c_0/video.m4s': 1024,
+        '456/c_1/entry.json': 7,
+      });
     });
 
     test('RED：原生侧必须递归遍历，不能只列一层子目录名', () {
