@@ -73,12 +73,25 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (Platform.isAndroid) {
-    final type = GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
+    // -1 (not 0) so "key absent" is distinguishable from an explicit `0`.
+    final type =
+        GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: -1);
     final customDownPath = Pref.downloadPath;
     // Only "SD卡存储" (type 1) keeps an absolute filesystem path as the working
     // download directory. "自定义目录(SAF)" (type 2) stores a content:// tree URI
     // which is not usable by dart:io, so files are written here to the app-private
     // directory first and moved into the SAF tree when the download completes.
+    //
+    // `downloadDirType` is a legacy parallel state source for `downloadPath`:
+    // two fields describing one directory, where the type acted as the switch
+    // that decided whether `downloadPath` was believable. It is the field that
+    // can be lost, though — measured on a device: `downloadDirType == 0` while
+    // `downloadPath` held a live SD card path with 16 tasks / 2.5 GB on it. The
+    // old `type == 1` test failed, the `else` branch overwrote the global
+    // `downloadPath` with an empty local dir, and the UI reported every download
+    // as lost. So `downloadPath` wins whenever it points at a real directory;
+    // `type` only distinguishes SAF (URI + separate working dir) from a
+    // filesystem path.
     if (type == 2) {
       // One-time migration: releases before `downloadSafUri` existed kept the
       // tree URI in `downloadPath`. Move it across so `downloadPath` only ever
@@ -96,20 +109,89 @@ Future<void> _initDownPath() async {
         } catch (e) {
           // A failed write must not abort startup. Keep the URI where it is:
           // `Pref.downloadSafUri` still reads it back via its legacy fallback,
-          // so the binding survives this session either way.
-          if (kDebugMode) {
-            debugPrint('downloadSafUri migration failed: $e');
-          }
+          // so the binding survives this session either way. Logged at warning
+          // level rather than only under kDebugMode: this is a silent
+          // misconfiguration when it happens in the field.
+          logger.w('downloadSafUri migration failed: $e');
         }
       }
       downloadPath = await safWorkingDir();
+      // Overwriting a *filesystem* path here means the stored working directory
+      // disagrees with the one startup computes. Usually harmless (same value),
+      // but if it is not, the user's files are in a directory this session will
+      // not look at.
+      if (customDownPath != null &&
+          customDownPath.isNotEmpty &&
+          !customDownPath.startsWith('content://') &&
+          customDownPath != downloadPath) {
+        logger.w(
+          'downloadDirType==2 but downloadPath was a filesystem path '
+          '($customDownPath); replaced with SAF working dir ($downloadPath). '
+          'Downloads made before this will not be listed.',
+        );
+      }
     } else if (type == 1 && customDownPath != null && customDownPath.isNotEmpty) {
       downloadPath = customDownPath;
+    } else if (_isUsableDownloadDir(customDownPath)) {
+      // `downloadDirType` says 0 (or was never written) but `downloadPath`
+      // points at a real directory. This is the desync that hid a populated SD
+      // card: trust the path, and repair the type so the next launch agrees.
+      downloadPath = customDownPath!;
+      logger.w(
+        'downloadDirType ($type) is out of sync with downloadPath '
+        '($customDownPath); recovered using downloadPath. '
+        'Migrating downloadDirType to 1.',
+      );
+      try {
+        await GStorage.setting.put(SettingBoxKey.downloadDirType, 1);
+      } catch (e) {
+        // Best-effort: the recovery above already took effect for this session,
+        // and a failed write must not abort startup. The next launch repeats
+        // the same recovery, so this cannot degrade into data loss.
+        logger.w('downloadDirType repair failed: $e');
+      }
     } else {
-      downloadPath = await safWorkingDir();
+      // Nothing usable stored. Only here is falling back to the private working
+      // directory correct — and if a value *was* stored, say so out loud
+      // instead of letting the user discover it as "all downloads lost".
+      final workingDir = await safWorkingDir();
+      if (customDownPath != null && customDownPath.isNotEmpty) {
+        logger.w(
+          'downloadPath ($customDownPath) is not a usable directory '
+          '(downloadDirType=$type); falling back to $workingDir.',
+        );
+      }
+      downloadPath = workingDir;
     }
   } else {
     downloadPath = defDownloadPath;
+  }
+}
+
+/// Whether [candidate] can be trusted as this session's download directory.
+///
+/// Requires all three: non-null, an absolute path, and a directory that exists
+/// right now. The existence probe is what separates a real user directory from
+/// a stale binding — an SD card path that is present is exactly the case that
+/// must not be discarded, and a path that is absent cannot be written to
+/// anyway, so refusing it costs nothing and keeps a broken binding from
+/// masquerading as a working one.
+///
+/// A `content://` URI is rejected explicitly: `path.isAbsolute` would accept
+/// it, but it is not usable by `dart:io`.
+bool _isUsableDownloadDir(String? candidate) {
+  if (candidate == null || candidate.isEmpty) return false;
+  if (candidate.startsWith('content://')) return false;
+  if (!path.isAbsolute(candidate)) return false;
+  try {
+    return Directory(candidate).existsSync();
+  } catch (e) {
+    // Unreadable parent, permission denied, malformed path — all mean "cannot
+    // use this", never "use it and find out later".
+    if (kDebugMode) {
+      debugPrint('downloadPath $candidate is not usable: $e');
+    }
+    return false;
   }
 }
 

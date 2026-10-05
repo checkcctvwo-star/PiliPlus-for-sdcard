@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show jsonDecode, jsonEncode;
-import 'dart:io' show Directory, File, Platform;
+import 'dart:io' show Directory, File, Platform, pid;
 
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/download.dart';
@@ -18,6 +18,7 @@ import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/services/download/scan_plan.dart';
+import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
 import 'package:PiliPlus/utils/danmaku_utils.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
@@ -43,6 +44,41 @@ class DownloadService extends GetxService {
   static const _maxDanmakuConcurrency = 4;
 
   final _lock = Lock();
+
+  /// Serialises every `entry.json` write in this process.
+  ///
+  /// `entry.json` is written by several call sites that cannot wait for each
+  /// other: `_onReceive` and `_onDone` are `void` callbacks, so they can only
+  /// fire-and-forget, while `_completeDownload` and `redownload` do await. Two
+  /// overlapping writers used to share one literal temp name (`entry.json.tmp`)
+  /// and the loser of the race renamed a file the winner had already moved —
+  /// 50 `PathNotFoundException: Cannot rename file to '.../entry.json', path =
+  /// '.../entry.json.tmp'` were read off a real device log. An SD card's FUSE
+  /// layer stretches the window from microseconds to milliseconds, which is why
+  /// it only ever showed up there.
+  ///
+  /// Chaining the writes closes the window for good: each one starts only after
+  /// the previous has finished, so a shared temp name could not collide even
+  /// if one were still used. The unique suffix in [_writeEntryJson] is kept as
+  /// a second, independent line of defence — it also protects against a stale
+  /// `.tmp` left behind by a process killed mid-write.
+  Future<void> _jsonWrites = Future.value();
+
+  /// Distinguishes the temp files of concurrent or successive writes.
+  int _jsonWriteSeq = 0;
+
+  /// Runs [op] after every previously enqueued `entry.json` write.
+  ///
+  /// The returned future carries [op]'s outcome to the caller, so awaiting it
+  /// still means "my write is on disk". [_jsonWrites] itself absorbs errors:
+  /// one failed write must not poison every write queued behind it, which is
+  /// what would turn a single transient SD card hiccup into a permanently dead
+  /// persistence path.
+  Future<void> _enqueueJsonWrite(Future<void> Function() op) {
+    final next = _jsonWrites.then((_) => op(), onError: (_) => op());
+    _jsonWrites = next.then((_) {}, onError: (Object _) {});
+    return next;
+  }
 
   final flagNotifier = SetNotifier();
   final waitDownloadQueue = RxList<BiliDownloadEntryInfo>();
@@ -1070,7 +1106,10 @@ class DownloadService extends GetxService {
           entry.ep
             ?..width = first.width
             ..height = first.height;
-          _updateBiliDownloadEntryJson(entry);
+          // Awaited: the download manager created above is already running and
+          // its first progress tick writes this same file, so the dimensions
+          // must reach disk ahead of that write rather than race it.
+          await _updateBiliDownloadEntryJson(entry);
           break;
         default:
           break;
@@ -1083,17 +1122,102 @@ class DownloadService extends GetxService {
     }
   }
 
-  Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) async {
-    final entryJsonFile = File(path.join(entry.entryDirPath, _entryFile));
-    final tempFile = File('${entryJsonFile.path}.tmp');
-    await tempFile.writeAsString(jsonEncode(entry.toJson()), flush: true);
-    tempFile.renameSync(entryJsonFile.path);
+  /// Persists [entry] to its `entry.json`, queued behind any write in flight.
+  ///
+  /// Callers that can await should await this: the returned future does not
+  /// complete until this entry's bytes are on disk. `void` callbacks must not
+  /// await — see [_enqueueJsonWrite] for why that is safe.
+  Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) {
+    // Encoded eagerly, inside the caller's synchronous frame, so the JSON
+    // reflects the entry as it is now. Encoding inside the queued closure would
+    // serialise whatever the entry happens to hold by the time the write gets
+    // its turn — for a progress callback that is a later, different state.
+    final json = jsonEncode(entry.toJson());
+    return _enqueueJsonWrite(() => _writeEntryJson(entry.entryDirPath, json));
+  }
+
+  Future<void> _writeEntryJson(String entryDirPath, String json) async {
+    final entryJsonFile = File(path.join(entryDirPath, _entryFile));
+    // Unique per write: `pid` keeps a leftover from a previous process from
+    // being clobbered, the counter separates concurrent writers. A shared name
+    // is what let two writers rename each other's file away.
+    final tempFile = File('${entryJsonFile.path}.$pid.${_jsonWriteSeq++}.tmp');
+    try {
+      await tempFile.writeAsString(json, flush: true);
+    } catch (e) {
+      await _deleteQuietly(tempFile);
+      rethrow;
+    }
+    try {
+      await tempFile.rename(entryJsonFile.path);
+      return;
+    } catch (e) {
+      // `rename` is atomic within a filesystem but not universally supported:
+      // an SD card exposed through FUSE can reject it outright. Copying the
+      // bytes across reaches the same end state, so a rename failure must not
+      // cost the user their download list. (Same fallback the upstream Android
+      // client uses.) `copy` truncates an existing destination, which is what
+      // makes it a valid replacement rather than a merge.
+      try {
+        await tempFile.copy(entryJsonFile.path);
+      } catch (e2) {
+        await _deleteQuietly(tempFile);
+        Error.throwWithStackTrace(
+          FileSystemException(
+            'entry.json 写入失败: rename 失败($e) 且 copy 回退失败($e2)',
+            entryJsonFile.path,
+          ),
+          StackTrace.current,
+        );
+      }
+      // The copy landed, so the write succeeded. A temp file that refuses to
+      // be removed is litter, not a failed write — reporting it as one would
+      // send the user looking for a problem that did not happen.
+      await _deleteQuietly(tempFile);
+    }
+  }
+
+  /// Best-effort temp cleanup. A leftover `.tmp` is harmless but confusing, and
+  /// on a card with little free space it is not free — but failing to delete it
+  /// must never mask the original write error.
+  Future<void> _deleteQuietly(File file) async {
+    try {
+      if (file.existsSync()) await file.delete();
+    } catch (_) {}
+  }
+
+  /// Enqueues an `entry.json` write from a `void` context and makes sure a
+  /// failure is recorded rather than lost.
+  ///
+  /// `DownloadManager`'s progress and completion callbacks are `void`, so they
+  /// cannot await. An unawaited future that fails is reported to the zone and
+  /// nowhere else — the download silently stops persisting its state, which is
+  /// how a write failure became "my downloads are gone" instead of an error
+  /// anyone could act on.
+  void _enqueueJsonWriteLogged(
+    BiliDownloadEntryInfo entry, {
+    required String source,
+  }) {
+    unawaited(
+      _updateBiliDownloadEntryJson(entry).catchError((Object e, StackTrace st) {
+        logger.w('entry.json 写入失败 ($source) ${entry.entryDirPath}: $e');
+        if (kDebugMode) {
+          debugPrintStack(stackTrace: st, label: 'entry.json write [$source]');
+        }
+      }),
+    );
   }
 
   void _onReceive(int progress, int total) {
     if (curDownload.value case final entry?) {
+      // Only the first progress tick carries the total, so this writes once per
+      // download rather than once per second. The throttle is load-bearing: the
+      // progress fields below are deliberately *not* persisted on every tick.
       if (progress == 0 && total != 0) {
-        _updateBiliDownloadEntryJson(entry..totalBytes = total);
+        _enqueueJsonWriteLogged(
+          entry..totalBytes = total,
+          source: '_onReceive',
+        );
       }
       entry
         ..downloadedBytes = progress
@@ -1121,9 +1245,18 @@ class DownloadService extends GetxService {
     if (curDownload.value case final curEntryInfo?) {
       curEntryInfo.downloadedBytes = curEntryInfo.totalBytes;
       if (status == DownloadStatus.completed) {
-        _completeDownload();
+        // `_completeDownload` writes `entry.json` itself, after the SAF
+        // migration has recorded the resulting URIs. Writing here too would
+        // race that write for no benefit — and lose the URIs, since this
+        // snapshot predates the migration.
+        unawaited(_completeDownload().catchError((Object e, StackTrace st) {
+          logger.w('下载完成处理失败 ${curEntryInfo.entryDirPath}: $e');
+          if (kDebugMode) {
+            debugPrintStack(stackTrace: st, label: '_completeDownload');
+          }
+        }));
       } else {
-        _updateBiliDownloadEntryJson(curEntryInfo);
+        _enqueueJsonWriteLogged(curEntryInfo, source: '_onDone');
       }
     }
   }
