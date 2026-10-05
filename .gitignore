@@ -76,6 +76,11 @@ app.*.map.json
 **/android/key.properties
 *.jks
 
+# 团队共享的 debug 签名：必须提交，否则 CI 产物无法覆盖安装到真机。
+# 仅用于 debug/测试构建，不含任何发布密钥，请勿用于正式上架。
+!**/android/key.properties
+!**/android/debug-piliplus.keystore
+
 # iOS/XCode related
 **/ios/**/*.mode1v3
 **/ios/**/*.mode2v3
