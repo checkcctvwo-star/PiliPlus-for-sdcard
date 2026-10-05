@@ -79,13 +79,34 @@ Future<void> _initDownPath() async {
     // download directory. "自定义目录(SAF)" (type 2) stores a content:// tree URI
     // which is not usable by dart:io, so files are written here to the app-private
     // directory first and moved into the SAF tree when the download completes.
-    if (type == 1 && customDownPath != null && customDownPath.isNotEmpty) {
+    if (type == 2) {
+      // One-time migration: releases before `downloadSafUri` existed kept the
+      // tree URI in `downloadPath`. Move it across so `downloadPath` only ever
+      // holds a filesystem path again — otherwise every `Directory(downloadPath)`
+      // in this session points at a path that cannot exist, and `_relativePath`
+      // silently degrades to `basename`, flattening the SAF directory layout.
+      // Leaving it unmigrated is not an option either: the binding would be
+      // invisible and the user's chosen directory silently dropped.
+      if (customDownPath != null &&
+          customDownPath.startsWith('content://') &&
+          GStorage.setting.get(SettingBoxKey.downloadSafUri) == null) {
+        try {
+          await GStorage.setting.put(SettingBoxKey.downloadSafUri, customDownPath);
+          await GStorage.setting.delete(SettingBoxKey.downloadPath);
+        } catch (e) {
+          // A failed write must not abort startup. Keep the URI where it is:
+          // `Pref.downloadSafUri` still reads it back via its legacy fallback,
+          // so the binding survives this session either way.
+          if (kDebugMode) {
+            debugPrint('downloadSafUri migration failed: $e');
+          }
+        }
+      }
+      downloadPath = await safWorkingDir();
+    } else if (type == 1 && customDownPath != null && customDownPath.isNotEmpty) {
       downloadPath = customDownPath;
     } else {
-      final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
-      downloadPath = externalStorageDirPath != null
-          ? path.join(externalStorageDirPath, PathUtils.downloadDir)
-          : defDownloadPath;
+      downloadPath = await safWorkingDir();
     }
   } else {
     downloadPath = defDownloadPath;

@@ -17,6 +17,7 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/services/download/download_manager.dart';
+import 'package:PiliPlus/services/download/scan_plan.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
 import 'package:PiliPlus/utils/danmaku_utils.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
@@ -46,6 +47,24 @@ class DownloadService extends GetxService {
   final flagNotifier = SetNotifier();
   final waitDownloadQueue = RxList<BiliDownloadEntryInfo>();
   final downloadList = <BiliDownloadEntryInfo>[];
+
+  /// The outcome of the most recent [deepScanRecovery] pass.
+  ///
+  /// Kept so a caller that did not await the pass — the automatic scan on page
+  /// open, for one — can still read what happened.
+  DeepScanReport lastDeepScanReport = DeepScanReport.empty;
+
+  /// How long a native SAF directory listing stays usable before it is
+  /// re-fetched.
+  ///
+  /// Deliberately shorter than a "recently picked directory" window: a user who
+  /// just pointed the app at a new folder and tapped scan must see that folder,
+  /// not a listing from before they chose it. Past this age the tree is walked
+  /// again, because a download that finished in the meantime is exactly what
+  /// the scan is looking for.
+  static const _safScanCacheTtl = Duration(minutes: 10);
+
+  ({String uri, List<String> dirs, int scannedAt})? _safScanCache;
 
   int? _curCid;
   int? get curCid => _curCid;
@@ -181,167 +200,463 @@ class DownloadService extends GetxService {
     }();
   }
 
-  Future<void> deepScanRecovery() async {
+  /// Rebuilds entries whose `entry.json` was lost, by walking the download
+  /// directory.
+  ///
+  /// [includeSaf] gates the SAF half of the scan. It is off by default because
+  /// this runs on every visit to the download page and a recursive SAF tree walk
+  /// is binder-bound; only the explicit "深度恢复" tap pays that cost.
+  Future<void> deepScanRecovery({bool includeSaf = false}) async {
     final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue];
     final type = GStorage.setting.get(
       SettingBoxKey.downloadDirType,
       defaultValue: 0,
     ) as int;
-    final safUri = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+    final safUri = Pref.downloadSafUri;
+    final hasSaf = type == 2 && Platform.isAndroid && (safUri?.isNotEmpty ?? false);
 
-    final folders = <String>{};
     final downloadPathStr = await _getDownloadPath();
     final localDir = Directory(downloadPathStr);
 
+    // Local and SAF names are collected into two separate lists. They used to
+    // share one `Set<String>`, which made a bare SAF name indistinguishable from
+    // a local directory name — and joining a SAF name onto the local path always
+    // produced a path that had never existed, so `existsSync()` discarded every
+    // SAF directory without a trace.
+    final localDirNames = <String>[];
     if (localDir.existsSync()) {
       await for (final dir in localDir.list()) {
         if (dir is Directory) {
-          folders.add(path.basename(dir.path));
+          localDirNames.add(path.basename(dir.path));
         }
       }
     }
 
-    if (type == 2 && safUri != null && safUri.isNotEmpty && Platform.isAndroid) {
-      try {
-        final List<dynamic>? safDirs = await const MethodChannel('com.piliplus/download')
-            .invokeListMethod<String>('scanSafDirectory', {'uri': safUri});
-        if (safDirs != null) {
-          folders.addAll(safDirs.cast<String>());
-        }
-      } catch (e) {
-        debugPrint('SAF deep scan error: $e');
-      }
-    }
+    var safDirNames = const <String>[];
+    var safScannedAt = 0;
+    Object? safError;
+    if (hasSaf && includeSaf) {
+      final uri = safUri!;
+      final cached = _safScanCache;
+      final age = cached == null
+          ? null
+          : DateTime.now().millisecondsSinceEpoch - cached.scannedAt;
+      final isFresh = cached != null &&
+          cached.uri == uri &&
+          age! >= 0 &&
+          age <= _safScanCacheTtl.inMilliseconds;
 
-    for (final avidStr in folders) {
-      if (avidStr.startsWith('s_')) continue; // skip bangumi for now
-      final avidPath = path.join(downloadPathStr, avidStr);
-      final dir = Directory(avidPath);
-      if (!dir.existsSync()) continue;
-
-      await for (final cDir in dir.list()) {
-        if (cDir is Directory) {
-          final entryFile = File(path.join(cDir.path, _entryFile));
-          if (!entryFile.existsSync()) {
-            String? typeTag;
-            await for (final typeDir in cDir.list()) {
-              if (typeDir is Directory) {
-                final potentialIndex = File(path.join(typeDir.path, _indexFile));
-                if (potentialIndex.existsSync()) {
-                  typeTag = path.basename(typeDir.path);
-                  break;
-                }
-              }
-            }
-            if (typeTag != null) {
-              try {
-                final res = await Request.dio.get('https://api.bilibili.com/x/web-interface/view?aid=$avidStr');
-                final data = res.data['data'];
-                if (data != null) {
-                  final title = data['title'] ?? 'Unknown';
-                  final pic = data['pic'] ?? '';
-                  final owner = data['owner']?['name'] ?? 'Unknown';
-                  final bvid = data['bvid'] ?? '';
-                  final cidStr = path.basename(cDir.path).replaceFirst('c_', '');
-                  final cid = int.tryParse(cidStr) ?? 0;
-                  int pageNum = 1;
-                  String partName = title;
-                  final pages = data['pages'];
-                  if (pages is List) {
-                    for (final p in pages) {
-                      if (p['cid'] == cid) {
-                        pageNum = p['page'] ?? 1;
-                        partName = p['part'] ?? title;
-                        break;
-                      }
-                    }
-                  }
-
-                  final pageData = PageInfo(
-                    cid: cid,
-                    page: pageNum,
-                    hasAlias: false,
-                    tid: 0,
-                    part: partName,
-                    downloadTitle: '视频已缓存完成',
-                    downloadSubtitle: title,
-                  );
-
-                  final entry = BiliDownloadEntryInfo(
-                    mediaType: 2,
-                    hasDashAudio: false,
-                    isCompleted: false,
-                    totalBytes: 0,
-                    downloadedBytes: 0,
-                    title: title,
-                    typeTag: typeTag,
-                    cover: pic,
-                    preferedVideoQuality: int.tryParse(typeTag) ?? 16,
-                    qualityPithyDescription: '',
-                    guessedTotalBytes: 0,
-                    totalTimeMilli: 0,
-                    danmakuCount: 0,
-                    timeUpdateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                    timeCreateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                    canPlayInAdvance: true,
-                    interruptTransformTempFile: false,
-                    spid: 0,
-                    bvid: bvid,
-                    avid: int.tryParse(avidStr) ?? 0,
-                    ownerName: owner,
-                    pageData: pageData,
-                  )
-                    ..pageDirPath = dir.path
-                    ..entryDirPath = cDir.path;
-
-                  await _updateBiliDownloadEntryJson(entry);
-                }
-              } catch (e) {
-                debugPrint('API reconstruction error: $e');
-              }
-            }
-          }
-
-          if (entryFile.existsSync()) {
-            try {
-              final entryJson = await entryFile.readAsString();
-              final entry = BiliDownloadEntryInfo.fromJson(jsonDecode(entryJson))
-                ..pageDirPath = dir.path
-                ..entryDirPath = cDir.path;
-
-              final tag = entry.typeTag;
-              if (tag != null) {
-                final typeDir = Directory(path.join(cDir.path, tag));
-                if (typeDir.existsSync()) {
-                  final videoFile = File(path.join(typeDir.path, PathUtils.videoNameType2));
-                  final audioFile = File(path.join(typeDir.path, PathUtils.audioNameType2));
-                  final type1File = File(path.join(typeDir.path, PathUtils.videoNameType1));
-
-                  int actualBytes = 0;
-                  if (videoFile.existsSync()) actualBytes += videoFile.lengthSync();
-                  if (audioFile.existsSync()) actualBytes += audioFile.lengthSync();
-                  if (type1File.existsSync()) actualBytes += type1File.lengthSync();
-
-                  if (entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
-                    entry.isCompleted = false;
-                    entry.status = DownloadStatus.wait;
-                    await _updateBiliDownloadEntryJson(entry);
-                    tempWaitQueue.add(entry);
-                  }
-                }
-              }
-            } catch (e) {
-              debugPrint('Integrity check error: $e');
-            }
-          }
+      if (isFresh) {
+        safDirNames = cached.dirs;
+        safScannedAt = cached.scannedAt;
+      } else {
+        try {
+          // Errors are deliberately not swallowed: a failed SAF scan must be
+          // reported, not indistinguishable from a scan that found nothing.
+          final scan = await const MethodChannel('com.piliplus/download')
+              .invokeMapMethod<String, dynamic>('scanSafDirectory', {'uri': uri});
+          safDirNames =
+              (scan?['dirs'] as List?)?.cast<String>().toList(growable: false) ??
+                  const [];
+          safScannedAt = scan?['scannedAt'] as int? ?? 0;
+          _safScanCache = (uri: uri, dirs: safDirNames, scannedAt: safScannedAt);
+        } catch (e) {
+          safError = e;
+          // A failed refresh must not leave the previous snapshot readable as
+          // if it were current.
+          _safScanCache = null;
         }
       }
     }
+
+    final plan = buildScanPlan(
+      localDirNames: localDirNames,
+      safDirNames: safDirNames,
+      safTreeUri: hasSaf ? safUri : null,
+    );
+
+    // Names the native scanner reported that no tree URI can address. They
+    // cannot be visited, so they are counted rather than folded into the local
+    // set to be swallowed by an existence check.
+    final unreachableSafNames = unaddressableSafNames(
+      safDirNames: safDirNames,
+      safTreeUri: hasSaf ? safUri : null,
+    );
+
+    var recovered = 0;
+    var requeued = 0;
+    for (final root in plan.avidRoots) {
+      if (root.isSaf) continue;
+      // `localPathFor` returns null for SAF roots by construction, so the join
+      // below is only ever reached with a name that came from the local disk.
+      final avidPath = plan.localPathFor(root, downloadPathStr);
+      if (avidPath == null) continue;
+      recovered += await _recoverLocalRoot(avidPath, root.name, tempWaitQueue);
+    }
+
+    var safVerified = 0;
+    final safOrphans = <String>[];
+    if (includeSaf && safError == null) {
+      // Every SAF root, bangumi included: verification asks whether files this
+      // device promised to keep are still there, which is a question about the
+      // tree and does not depend on which recovery path the root would use if
+      // the files turned out to be missing.
+      for (final root in plan.safRoots) {
+        final result = await _verifySafRoot(root, tempWaitQueue, safOrphans);
+        safVerified += result.verified;
+        requeued += result.requeued;
+      }
+    }
+
+    // Bangumi seasons reach a dedicated pass instead of being skipped. A season
+    // directory is `s_<seasonId>`, not an avid, so feeding it to the avid
+    // `view?aid=` lookup returns an unrelated video or nothing at all. The
+    // prefix is parsed here so the dedicated pass receives a real season id.
+    //
+    // Only local roots: a SAF season has no `entry.json` (only media artifacts
+    // are copied there), so there is nothing on disk to check. Its files were
+    // already accounted for by `_verifySafRoot` above.
+    var bangumiChecked = 0;
+    final unrecoveredBangumi = <String>[];
+    for (final root in plan.bangumiRoots) {
+      if (root.isSaf) continue;
+      final name = root.name;
+      final seasonId =
+          name.startsWith('s_') ? int.tryParse(name.substring(2)) : null;
+      final checked = await _checkBangumiRoot(
+        seasonDir: Directory(path.join(downloadPathStr, name)),
+        seasonId: seasonId,
+        tempWaitQueue: tempWaitQueue,
+      );
+      bangumiChecked += checked;
+      if (checked == 0) unrecoveredBangumi.add(name);
+    }
+
     waitDownloadQueue.assignAll(tempWaitQueue.toSet().toList());
 
     await _readDownloadList();
     waitDownloadQueue.refresh();
+
+    final report = DeepScanReport(
+      recovered: recovered,
+      requeued: requeued,
+      safVerified: safVerified,
+      safOrphans: safOrphans,
+      unrecoveredBangumi: unrecoveredBangumi,
+      unreachableSafNames: unreachableSafNames,
+      bangumiChecked: bangumiChecked,
+      safScanned: hasSaf && includeSaf && safError == null,
+      safScannedAt: safScannedAt,
+      safError: safError,
+    );
+    lastDeepScanReport = report;
     flagNotifier.refresh();
+  }
+
+  /// Rebuilds or requeues every entry under one local avid directory.
+  ///
+  /// Returns how many entries were rebuilt from the B站 API.
+  Future<int> _recoverLocalRoot(
+    String avidPath,
+    String avidName,
+    List<BiliDownloadEntryInfo> tempWaitQueue,
+  ) async {
+    final dir = Directory(avidPath);
+    var recovered = 0;
+
+    await for (final cDir in dir.list()) {
+      if (cDir is Directory) {
+        final entryFile = File(path.join(cDir.path, _entryFile));
+        if (!entryFile.existsSync()) {
+          String? typeTag;
+          await for (final typeDir in cDir.list()) {
+            if (typeDir is Directory) {
+              final potentialIndex = File(path.join(typeDir.path, _indexFile));
+              if (potentialIndex.existsSync()) {
+                typeTag = path.basename(typeDir.path);
+                break;
+              }
+            }
+          }
+          if (typeTag != null) {
+            try {
+              final res = await Request.dio.get('https://api.bilibili.com/x/web-interface/view?aid=$avidName');
+              final data = res.data['data'];
+              if (data != null) {
+                final title = data['title'] ?? 'Unknown';
+                final pic = data['pic'] ?? '';
+                final owner = data['owner']?['name'] ?? 'Unknown';
+                final bvid = data['bvid'] ?? '';
+                final cidStr = path.basename(cDir.path).replaceFirst('c_', '');
+                final cid = int.tryParse(cidStr) ?? 0;
+                int pageNum = 1;
+                String partName = title;
+                final pages = data['pages'];
+                if (pages is List) {
+                  for (final p in pages) {
+                    if (p['cid'] == cid) {
+                      pageNum = p['page'] ?? 1;
+                      partName = p['part'] ?? title;
+                      break;
+                    }
+                  }
+                }
+
+                final pageData = PageInfo(
+                  cid: cid,
+                  page: pageNum,
+                  hasAlias: false,
+                  tid: 0,
+                  part: partName,
+                  downloadTitle: '视频已缓存完成',
+                  downloadSubtitle: title,
+                );
+
+                final entry = BiliDownloadEntryInfo(
+                  mediaType: 2,
+                  hasDashAudio: false,
+                  isCompleted: false,
+                  totalBytes: 0,
+                  downloadedBytes: 0,
+                  title: title,
+                  typeTag: typeTag,
+                  cover: pic,
+                  preferedVideoQuality: int.tryParse(typeTag) ?? 16,
+                  qualityPithyDescription: '',
+                  guessedTotalBytes: 0,
+                  totalTimeMilli: 0,
+                  danmakuCount: 0,
+                  timeUpdateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                  timeCreateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                  canPlayInAdvance: true,
+                  interruptTransformTempFile: false,
+                  spid: 0,
+                  bvid: bvid,
+                  avid: int.tryParse(avidName) ?? 0,
+                  ownerName: owner,
+                  pageData: pageData,
+                )
+                  ..pageDirPath = dir.path
+                  ..entryDirPath = cDir.path;
+
+                await _updateBiliDownloadEntryJson(entry);
+                recovered++;
+              }
+            } catch (e) {
+              debugPrint('API reconstruction error: $e');
+            }
+          }
+        }
+
+        if (entryFile.existsSync()) {
+          try {
+            final entryJson = await entryFile.readAsString();
+            final entry = BiliDownloadEntryInfo.fromJson(jsonDecode(entryJson))
+              ..pageDirPath = dir.path
+              ..entryDirPath = cDir.path;
+
+            final tag = entry.typeTag;
+            if (tag != null) {
+              final typeDir = Directory(path.join(cDir.path, tag));
+              if (typeDir.existsSync()) {
+                final actualBytes = await _measureLocalArtifacts(typeDir);
+                if (entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
+                  entry
+                    ..isCompleted = false
+                    ..status = DownloadStatus.wait;
+                  await _updateBiliDownloadEntryJson(entry);
+                  tempWaitQueue.add(entry);
+                }
+              }
+            }
+          } catch (e) {
+            debugPrint('Integrity check error: $e');
+          }
+        }
+      }
+    }
+    return recovered;
+  }
+
+  /// Verifies the SAF copies of already-migrated entries under [root].
+  ///
+  /// The SAF tree holds media artifacts only — `_migrateToSafIfNeeded` copies
+  /// `0.mp4` or `video.m4s`+`audio.m4s` and never `entry.json`. So this cannot
+  /// rebuild a task; it can only answer "are the files this device promised to
+  /// keep still there". Anything in the tree that no local entry claims is
+  /// reported as an orphan rather than deleted: a previous install may have
+  /// copied it, and the tree holds no metadata to tell wanted from stray.
+  ///
+  /// Only *missing* files trigger a requeue. Comparing sizes instead would be
+  /// theatre: `totalBytes` is populated from the video stream's `total` only, so
+  /// any comparison against video+audio on disk is satisfied by construction and
+  /// would report every intact download as broken.
+  Future<({int verified, int requeued})> _verifySafRoot(
+    ScanRoot root,
+    List<BiliDownloadEntryInfo> tempWaitQueue,
+    List<String> orphans,
+  ) async {
+    final treeUri = root.uri;
+    if (treeUri == null || treeUri.isEmpty) {
+      orphans.add(root.name);
+      return (verified: 0, requeued: 0);
+    }
+
+    final files = await DownloadManager.scanSafFiles(
+      treeUri: treeUri,
+      relativePath: root.name,
+    );
+
+    // Group the tree contents by their first path segment: `c_<cid>` for UGC,
+    // `<episodeId>` for bangumi. That segment is the only identity the tree
+    // carries — there is no `entry.json` in here to say what a file is for.
+    final groups = <String, List<String>>{};
+    for (final rel in files.keys) {
+      final idx = rel.indexOf('/');
+      if (idx <= 0) {
+        orphans.add(rel);
+        continue;
+      }
+      groups.putIfAbsent(rel.substring(0, idx), () => []).add(rel);
+    }
+
+    var verified = 0;
+    var requeued = 0;
+    final claimed = <String>{};
+
+    // Walk the entries this device says it migrated. A group with no files
+    // means the copy is gone — that is the loss this whole pass exists to
+    // catch, and it is only visible by looking at the local entries, since a
+    // missing group leaves no trace in the tree.
+    for (final entry in _entriesForSafRoot(root.name)) {
+      if (entry.safFileUris == null) continue;
+      final group = _safGroupKeyFor(entry);
+      if (group == null) continue;
+      claimed.add(group);
+
+      if (groups.containsKey(group)) {
+        verified++;
+        continue;
+      }
+      entry
+        ..isCompleted = false
+        ..status = DownloadStatus.wait
+        // The recorded URIs no longer resolve; clearing them lets the redownload
+        // write a fresh copy instead of failing against a dead handle.
+        ..safFileUris = null;
+      await _updateBiliDownloadEntryJson(entry);
+      tempWaitQueue.add(entry);
+      requeued++;
+    }
+
+    // Whatever the tree holds that no entry claimed. Reported, never deleted.
+    for (final group in groups.entries) {
+      if (!claimed.contains(group.key)) orphans.addAll(group.value);
+    }
+
+    return (verified: verified, requeued: requeued);
+  }
+
+  /// The SAF subdirectory name an entry's artifacts live under.
+  ///
+  /// `c_<cid>` for a UGC page, `<episodeId>` for a bangumi episode — the two
+  /// layouts `_getDownloadEntryDir` writes.
+  ///
+  /// The `ep`-before-`pageData` order mirrors `_getDownloadEntryDir` exactly.
+  /// The two must agree: if they picked different segments for an entry that
+  /// somehow has both, the scan would look under a directory the copy was never
+  /// written to and report a perfectly intact download as lost.
+  String? _safGroupKeyFor(BiliDownloadEntryInfo entry) {
+    if (entry.ep case final ep?) return ep.episodeId.toString();
+    if (entry.pageData case final page?) return 'c_${page.cid}';
+    return null;
+  }
+
+  /// Every entry that could own files under the SAF root named [rootName].
+  ///
+  /// The name is matched against both the avid and the season id because a
+  /// SAF root is `s_<seasonId>` for bangumi and `<avid>` for UGC, while
+  /// `pageId` normalises the two to season id and avid respectively.
+  Iterable<BiliDownloadEntryInfo> _entriesForSafRoot(String rootName) sync* {
+    final avid = rootName.startsWith('s_') ? null : rootName;
+    final seasonId = rootName.startsWith('s_') ? rootName.substring(2) : null;
+    final seen = <BiliDownloadEntryInfo>{};
+    for (final entry in <BiliDownloadEntryInfo>[
+      ...downloadList,
+      ...waitDownloadQueue,
+    ]) {
+      final matches = (avid != null &&
+              (entry.avid.toString() == avid || entry.pageId == avid)) ||
+          (seasonId != null && entry.pageId == seasonId);
+      if (!matches) continue;
+      if (seen.add(entry)) yield entry;
+    }
+  }
+
+  /// Runs the integrity check a bangumi season directory can support.
+  ///
+  /// Rebuilding a season from scratch needs the PGC season API, which this pass
+  /// does not call. But an `entry.json` that survived carries everything needed
+  /// to check whether the files are still all there, so a season that lost its
+  /// media can still be pushed back onto the wait queue instead of being
+  /// silently forgotten.
+  ///
+  /// Returns the number of entries checked; zero tells the caller the season
+  /// needs a recovery path this pass does not have.
+  Future<int> _checkBangumiRoot({
+    required Directory seasonDir,
+    required int? seasonId,
+    required List<BiliDownloadEntryInfo> tempWaitQueue,
+  }) async {
+    if (seasonId == null || !seasonDir.existsSync()) return 0;
+
+    var checked = 0;
+    await for (final entryDir in seasonDir.list()) {
+      if (entryDir is! Directory) continue;
+      final entryFile = File(path.join(entryDir.path, _entryFile));
+      if (!entryFile.existsSync()) continue;
+      try {
+        final entry = BiliDownloadEntryInfo.fromJson(
+          jsonDecode(await entryFile.readAsString()),
+        )
+          ..pageDirPath = seasonDir.path
+          ..entryDirPath = entryDir.path;
+
+        final tag = entry.typeTag;
+        if (tag == null || !entry.isCompleted) continue;
+
+        final typeDir = Directory(path.join(entryDir.path, tag));
+        if (!typeDir.existsSync()) continue;
+
+        checked++;
+        final actualBytes = await _measureLocalArtifacts(typeDir);
+        if (entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
+          entry
+            ..isCompleted = false
+            ..status = DownloadStatus.wait
+            ..safFileUris = null;
+          await _updateBiliDownloadEntryJson(entry);
+          tempWaitQueue.add(entry);
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('Bangumi integrity check error: $e');
+      }
+    }
+    return checked;
+  }
+
+  /// Total size of the media artifacts in one type directory.
+  Future<int> _measureLocalArtifacts(Directory typeDir) async {
+    var bytes = 0;
+    for (final name in const [
+      PathUtils.videoNameType2,
+      PathUtils.audioNameType2,
+      PathUtils.videoNameType1,
+    ]) {
+      final file = File(path.join(typeDir.path, name));
+      if (file.existsSync()) bytes += file.lengthSync();
+    }
+    return bytes;
   }
 
   Future<void> _readDownloadList() async {
@@ -863,7 +1178,7 @@ class DownloadService extends GetxService {
       defaultValue: 0,
     ) as int;
     if (type != 2) return;
-    final safUri = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+    final safUri = Pref.downloadSafUri;
     if (safUri == null || safUri.isEmpty) return;
 
     final typeTag = entry.typeTag;
@@ -963,6 +1278,74 @@ class DownloadService extends GetxService {
     nextDownload();
   }
 
+  /// Deletes this entry's artifacts from the SAF tree.
+  ///
+  /// Two independent actions, because neither alone is sufficient:
+  ///   * per-file delete via each `content://` URI recorded in
+  ///     [BiliDownloadEntryInfo.safFileUris] — the only reliable handle on
+  ///     files this device actually wrote;
+  ///   * a recursive delete of the artifact directory, addressed as tree URI
+  ///     plus relative path — the only way to reach artifacts of legacy
+  ///     entries whose `safFileUris` is null, leftover `.<name>.tmp` files,
+  ///     and the empty directory shells per-file deletion leaves behind.
+  ///
+  /// Returns true only when the tree no longer holds the artifacts. A false
+  /// return is not fatal: the local copy is deleted either way and the entry is
+  /// removed from the lists, because leaving it would let `_readDownloadList`
+  /// resurrect an entry whose URIs no longer resolve.
+  Future<bool> _deleteSafArtifacts(BiliDownloadEntryInfo entry) async {
+    final safUri = Pref.downloadSafUri;
+    if (safUri == null || safUri.isEmpty) return false;
+
+    var ok = true;
+
+    final uris = entry.safFileUris?.values.toList(growable: false) ??
+        const <String>[];
+    for (final uri in uris) {
+      try {
+        final res = await DownloadManager.deleteSafFile(uri);
+        if (res != true) ok = false;
+      } catch (e) {
+        ok = false;
+        if (kDebugMode) debugPrint('deleteSafFile failed: $e');
+      }
+    }
+
+    final relative = _relativePath(entry.entryDirPath);
+    if (relative.isNotEmpty) {
+      try {
+        final res = await DownloadManager.deleteSafPath(
+          treeUri: safUri,
+          relativePath: relative,
+        );
+        if (res != true) ok = false;
+      } catch (e) {
+        ok = false;
+        if (kDebugMode) debugPrint('deleteSafPath($relative) failed: $e');
+      }
+    }
+
+    return ok;
+  }
+
+  /// Deletes the SAF-side directory shell for one local page directory.
+  Future<bool> _deleteSafPathFor(String pageDirPath) async {
+    final safUri = Pref.downloadSafUri;
+    if (safUri == null || safUri.isEmpty) return false;
+    final relative = _relativePath(pageDirPath);
+    if (relative.isEmpty) return false;
+    try {
+      return await DownloadManager.deleteSafPath(
+            treeUri: safUri,
+            relativePath: relative,
+          ) ==
+          true;
+    } catch (e) {
+      if (kDebugMode) debugPrint('deleteSafPath($relative) failed: $e');
+      return false;
+    }
+  }
+
   Future<void> deleteDownload({
     required BiliDownloadEntryInfo entry,
     bool removeList = false,
@@ -973,39 +1356,36 @@ class DownloadService extends GetxService {
     if (curDownload.value?.cid == entry.cid) {
       await cancelDownload(isDelete: true, downloadNext: downloadNext);
     }
-    
+
     // Mark as deleting
-    entry.status = DownloadStatus.pause; 
+    entry.status = DownloadStatus.pause;
     flagNotifier.refresh();
 
     await videoPlayerServiceHandler?.stop();
     await PlPlayerController.instance?.videoPlayerController?.stop();
 
-    bool deletedViaSaf = false;
-    if (Platform.isAndroid) {
-      try {
-        final res = await const MethodChannel('com.piliplus/download').invokeMethod<bool>('deleteSafFile', {'path': entry.entryDirPath});
-        deletedViaSaf = res == true;
-      } catch (e, st) { print("Error reading entry: $e\n$st"); }
-    }
-    
+    // SAF first, then local unconditionally. Gating the local cleanup on the
+    // SAF result used to be safe only because the SAF delete never succeeded;
+    // once it does, `entry.json` would survive in app-private storage, the next
+    // `_readDownloadList` would read it back, and the entry the user just
+    // deleted would reappear — unplayable, because its URIs are gone.
+    final deletedViaSaf = await _deleteSafArtifacts(entry);
+
     bool deleted = true;
-    if (!deletedViaSaf) {
-      final downloadDir = Directory(entry.pageDirPath);
-      if (downloadDir.existsSync()) {
-        if (!await downloadDir.lengthGte(2)) {
-          await downloadDir.tryDel(recursive: true);
-          deleted = !downloadDir.existsSync();
-        } else {
-          final entryDir = Directory(entry.entryDirPath);
-          if (entryDir.existsSync()) {
-            await entryDir.tryDel(recursive: true);
-            deleted = !entryDir.existsSync();
-          }
+    final downloadDir = Directory(entry.pageDirPath);
+    if (downloadDir.existsSync()) {
+      if (!await downloadDir.lengthGte(2)) {
+        await downloadDir.tryDel(recursive: true);
+        deleted = !downloadDir.existsSync();
+      } else {
+        final entryDir = Directory(entry.entryDirPath);
+        if (entryDir.existsSync()) {
+          await entryDir.tryDel(recursive: true);
+          deleted = !entryDir.existsSync();
         }
       }
     }
-    
+
     // Only remove from UI if actually deleted from disk (or if it was already missing)
     if (deleted || deletedViaSaf) {
       if (removeList) {
@@ -1017,7 +1397,7 @@ class DownloadService extends GetxService {
     } else {
       entry.status = DownloadStatus.failDownload; // Mark as failed so user knows
     }
-    
+
     if (refresh) {
       flagNotifier.refresh();
     }
@@ -1030,21 +1410,25 @@ class DownloadService extends GetxService {
     await videoPlayerServiceHandler?.stop();
     await PlPlayerController.instance?.videoPlayerController?.stop();
 
-    bool deletedViaSaf = false;
-    if (Platform.isAndroid) {
-      try {
-        final res = await const MethodChannel('com.piliplus/download').invokeMethod<bool>('deleteSafFile', {'path': pageDirPath});
-        deletedViaSaf = res == true;
-      } catch (e, st) { print("Error reading entry: $e\n$st"); }
+    // Look the page's entries up by path rather than changing the signature:
+    // all three call sites (`controller.dart`, `detail/view.dart`) deal in
+    // paths, and passing entries in would reach into the UI layer for no gain.
+    // The scan is O(downloadList), which is tens of entries.
+    var safOk = true;
+    for (final entry in <BiliDownloadEntryInfo>[
+      ...downloadList,
+      ...waitDownloadQueue,
+    ].where((e) => e.pageDirPath == pageDirPath)) {
+      if (!await _deleteSafArtifacts(entry)) safOk = false;
     }
-    bool success = true;
-    if (!deletedViaSaf) {
-      final dir = Directory(pageDirPath);
-      await dir.tryDel(recursive: true);
-      success = !dir.existsSync();
-    }
-    
-    if (success || deletedViaSaf) {
+    if (!await _deleteSafPathFor(pageDirPath)) safOk = false;
+
+    final dir = Directory(pageDirPath);
+    await dir.tryDel(recursive: true);
+    var success = !dir.existsSync();
+    if (safOk) success = true;
+
+    if (success) {
       downloadList.removeWhere((e) => e.pageDirPath == pageDirPath);
     }
     

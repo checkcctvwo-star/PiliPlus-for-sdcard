@@ -142,9 +142,13 @@ class _DownloadPageState extends State<DownloadPage> with GridMixin {
                   tooltip: '深度恢复',
                   onPressed: () async {
                     SmartDialog.showLoading(msg: '深度扫描中...');
-                    await _downloadService.deepScanRecovery();
+                    // Only this path scans SAF: the recursive tree walk is
+                    // binder-bound and would otherwise run on every visit to
+                    // the download page.
+                    await _downloadService.deepScanRecovery(includeSaf: true);
                     SmartDialog.dismiss();
-                    SmartDialog.showToast('扫描完成');
+                    SmartDialog.showToast(
+                        _downloadService.lastDeepScanReport.message);
                   },
                   icon: const Icon(Icons.document_scanner),
                 ),

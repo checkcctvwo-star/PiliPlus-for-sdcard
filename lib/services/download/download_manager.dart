@@ -32,7 +32,7 @@ class DownloadManager {
     try {
       await _channel.invokeMethod('startDownload', {
         'url': url,
-        'savePath': savePath,
+        'path': savePath,
       });
     } catch (e) {
       // error handling
@@ -121,6 +121,59 @@ class DownloadManager {
     try {
       await _channel.invokeMethod<void>('clearSafPfds');
     } catch (_) {}
+  }
+
+  /// Deletes a single document from the SAF tree.
+  ///
+  /// [contentUri] must be a document URI as returned by [saveToSafDirectory],
+  /// **not** a filesystem path. Passing a path makes the native handler read a
+  /// null argument and answer `INVALID_ARGS`, which is how this call used to
+  /// fail silently.
+  static Future<bool?> deleteSafFile(String contentUri) async {
+    try {
+      return await _channel.invokeMethod<bool>('deleteSafFile', {'uri': contentUri});
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Recursively deletes [relativePath] under the SAF tree [treeUri].
+  ///
+  /// This is the only way to reach artifacts of entries whose `safFileUris` is
+  /// null (tasks that predate the field), leftover `.<name>.tmp` files, and the
+  /// empty directory shells per-file deletion leaves behind.
+  static Future<bool?> deleteSafPath({
+    required String treeUri,
+    required String relativePath,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>('deleteSafPath', {
+        'uri': treeUri,
+        'relativePath': relativePath,
+      });
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Recursively lists files under [relativePath] in the SAF tree [treeUri],
+  /// as a map of relative path (`c_456/80/video.m4s`) to size in bytes.
+  ///
+  /// Dart cannot read a `content://` byte, so this is the only way to judge
+  /// whether a SAF-side artifact still exists and is complete.
+  static Future<Map<String, int>> scanSafFiles({
+    required String treeUri,
+    required String relativePath,
+  }) async {
+    try {
+      final result = await _channel.invokeMapMethod<String, int>('scanSafFiles', {
+        'uri': treeUri,
+        'relativePath': relativePath,
+      });
+      return result ?? const {};
+    } catch (_) {
+      return const {};
+    }
   }
 
   final String url;

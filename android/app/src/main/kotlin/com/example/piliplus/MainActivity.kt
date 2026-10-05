@@ -27,6 +27,12 @@ class MainActivity : AudioServiceActivity() {
     private var pendingDirectoryResult: MethodChannel.Result? = null
     private val safExecutor = java.util.concurrent.Executors.newFixedThreadPool(1)
 
+    // Separate pool for the long-running, purely-statistical tree walks
+    // (scanSafFiles / deleteSafPath). Keeping them off `safExecutor` means a
+    // multi-second recursive scan cannot queue behind — and delay — the
+    // `resolveContentUriToPath` call playback start-up is waiting on.
+    private val safIoExecutor = java.util.concurrent.Executors.newFixedThreadPool(2)
+
     // Holds open ParcelFileDescriptors for SAF URIs whose real path could not be
     // resolved via /proc/self/fd (rare on SD cards with strict SELinux). They must
     // stay open as long as the mpv /proc/self/fd/<n> path is in use.
@@ -34,6 +40,15 @@ class MainActivity : AudioServiceActivity() {
     
     private var migrationJob: Job? = null
     private var progressSink: EventChannel.EventSink? = null
+
+    private companion object {
+        // A SAF tree walk costs one binder round trip per `listFiles()` call, so
+        // both bounds are load-bearing: depth keeps a pathological tree from
+        // recursing forever, and the entry cap keeps the returned map small
+        // enough to cross the channel in one piece.
+        const val MAX_SAF_SCAN_DEPTH = 8
+        const val MAX_SAF_SCAN_FILES = 20_000
+    }
 
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
@@ -268,13 +283,31 @@ class MainActivity : AudioServiceActivity() {
                     if (uriString != null) {
                         try {
                             val uri = Uri.parse(uriString)
+                            // A URI may address a single document (the common case,
+                            // from `safFileUris`) or a whole directory. Deleting a
+                            // directory with a bare `delete()` leaves its children
+                            // behind, so recurse explicitly.
                             val documentFile = DocumentFile.fromSingleUri(this@MainActivity, uri)
-                            if (documentFile != null && documentFile.exists()) {
-                                documentFile.delete()
+                            val deleted = if (documentFile != null && documentFile.isDirectory) {
+                                deleteRecursively(documentFile)
                             } else {
-                                contentResolver.delete(uri, null, null)
+                                if (documentFile != null && documentFile.exists()) {
+                                    // Some ROMs (ColorOS/MIUI) implement
+                                    // ContentResolver.delete() as "move to .mediaTrash"
+                                    // rather than a real delete. Truncating the file to
+                                    // 0 bytes first makes that a no-op even if it happens.
+                                    try {
+                                        val pfd = contentResolver.openFileDescriptor(uri, "rw")
+                                        pfd?.use { android.system.Os.ftruncate(it.fileDescriptor, 0L) }
+                                    } catch (_: Exception) {
+                                        // Truncation failing must not stop the delete.
+                                    }
+                                    documentFile.delete()
+                                } else {
+                                    contentResolver.delete(uri, null, null) > 0
+                                }
                             }
-                            result.success(true)
+                            result.success(deleted)
                         } catch (e: FileNotFoundException) {
                             result.success(true)
                         } catch (e: Exception) {
@@ -282,6 +315,49 @@ class MainActivity : AudioServiceActivity() {
                         }
                     } else {
                         result.error("INVALID_ARGS", "uri is null", null)
+                    }
+                }
+                "deleteSafPath" -> {
+                    val uriString = call.argument<String>("uri")
+                    val relativePath = call.argument<String>("relativePath")
+                    if (uriString == null || relativePath == null) {
+                        result.error("INVALID_ARGS", "uri or relativePath is null", null)
+                        return@setMethodCallHandler
+                    }
+                    safIoExecutor.execute {
+                        try {
+                            var dir = DocumentFile.fromTreeUri(this@MainActivity, Uri.parse(uriString))
+                            for (segment in relativePath.split("/")) {
+                                if (segment.isEmpty()) continue
+                                dir = dir?.findFile(segment) ?: break
+                            }
+                            val deleted = dir == null || deleteRecursively(dir)
+                            runOnUiThread { result.success(deleted) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("DELETE_FAILED", e.message, e.toString()) }
+                        }
+                    }
+                }
+                "scanSafFiles" -> {
+                    val uriString = call.argument<String>("uri")
+                    val relativePath = call.argument<String>("relativePath")
+                    if (uriString == null || relativePath == null) {
+                        result.error("INVALID_ARGS", "uri or relativePath is null", null)
+                        return@setMethodCallHandler
+                    }
+                    safIoExecutor.execute {
+                        try {
+                            var dir = DocumentFile.fromTreeUri(this@MainActivity, Uri.parse(uriString))
+                            for (segment in relativePath.split("/")) {
+                                if (segment.isEmpty()) continue
+                                dir = dir?.findFile(segment) ?: break
+                            }
+                            val files = LinkedHashMap<String, Long>()
+                            if (dir != null) listFilesRecursively(dir, "", files)
+                            runOnUiThread { result.success(files) }
+                        } catch (e: Exception) {
+                            runOnUiThread { result.error("SCAN_FAILED", e.message, e.toString()) }
+                        }
                     }
                 }
                 "scanSafDirectory" -> {
@@ -294,8 +370,28 @@ class MainActivity : AudioServiceActivity() {
                         try {
                             val uri = Uri.parse(uriString)
                             val root = DocumentFile.fromTreeUri(this@MainActivity, uri)
-                            val dirNames = root?.listFiles()?.filter { it.isDirectory }?.mapNotNull { it.name } ?: emptyList()
-                            runOnUiThread { result.success(dirNames) }
+                            // The real layout is <root>/<avid>/<c_N>/<typeTag>/<file>,
+                            // so listing one level of subdirectories returns names the
+                            // Dart caller cannot resolve any further. Walk the whole
+                            // tree instead and report first-level directories plus
+                            // every file's size, keyed by path relative to the root.
+                            val dirs = LinkedHashSet<String>()
+                            val files = LinkedHashMap<String, Long>()
+                            root?.listFiles()?.forEach { child ->
+                                val name = child.name ?: return@forEach
+                                if (child.isDirectory) {
+                                    dirs.add(name)
+                                    listFilesRecursively(child, name, files, 1)
+                                } else {
+                                    files[name] = child.length()
+                                }
+                            }
+                            val payload = mapOf(
+                                "dirs" to dirs.toList(),
+                                "files" to files,
+                                "scannedAt" to System.currentTimeMillis()
+                            )
+                            runOnUiThread { result.success(payload) }
                         } catch (e: Exception) {
                             runOnUiThread { result.error("SCAN_FAILED", e.message, e.toString()) }
                         }
@@ -475,6 +571,45 @@ class MainActivity : AudioServiceActivity() {
     private fun getMimeTypeFromExtension(fileName: String): String {
         val extension = android.webkit.MimeTypeMap.getFileExtensionFromUrl(fileName)
         return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
+    }
+
+    // A SAF tree walk costs one binder round trip per `listFiles()` call, so an
+    // unbounded traversal of a large tree would hang the caller and return an
+    // enormous payload across the channel. Both caps are load-bearing.
+    //
+    // Records every *file* under [doc], keyed by its path relative to [doc].
+    // Directories are traversed rather than recorded: the caller already knows
+    // the directory names it cares about, and what it cannot derive from a name
+    // is the size of the payload inside.
+    private fun listFilesRecursively(
+        doc: DocumentFile,
+        prefix: String,
+        out: MutableMap<String, Long>,
+        depth: Int = 0,
+    ) {
+        if (depth > MAX_SAF_SCAN_DEPTH || out.size >= MAX_SAF_SCAN_FILES) return
+        for (child in doc.listFiles()) {
+            if (out.size >= MAX_SAF_SCAN_FILES) return
+            val name = child.name ?: continue
+            val relative = if (prefix.isEmpty()) name else "$prefix/$name"
+            if (child.isDirectory) {
+                listFilesRecursively(child, relative, out, depth + 1)
+            } else {
+                out[relative] = child.length()
+            }
+        }
+    }
+
+    // `DocumentFile.delete()` does not delete a directory's children, so an
+    // explicit bottom-up pass is required; otherwise every delete leaves an
+    // empty shell behind.
+    private fun deleteRecursively(doc: DocumentFile): Boolean {
+        if (doc.isDirectory) {
+            for (child in doc.listFiles()) {
+                deleteRecursively(child)
+            }
+        }
+        return doc.delete()
     }
 
     override fun onDestroy() {

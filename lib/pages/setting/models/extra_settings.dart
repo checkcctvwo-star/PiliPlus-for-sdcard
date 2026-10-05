@@ -94,8 +94,7 @@ List<SettingsModel> get extraSettings => [
         // For SAF mode, downloadPath is a private working dir; show the stored
         // content:// tree URI the files are copied into on completion.
         if (type == 2) {
-          return GStorage.setting.get(SettingBoxKey.downloadPath) as String? ??
-              '自定义目录(SAF)';
+          return Pref.downloadSafUri ?? '自定义目录(SAF)';
         }
         return '本机存储 (默认)';
       },
@@ -1259,8 +1258,15 @@ Future<int> _calculateDirSize(Directory dir) async {
 
 Future<void> _handleMigration(BuildContext context, VoidCallback setState, String newPath, int dirType, String toastMsg) async {
   Get.back(); // close the SimpleDialog
-  
-  if (downloadPath == newPath) return;
+
+  // In SAF mode `newPath` is a content:// tree URI while `downloadPath` is the
+  // working directory, so the two can never be equal — comparing them would
+  // re-run a full migration every time the same SAF folder is picked again.
+  if (dirType == 2) {
+    if (Pref.downloadSafUri == newPath) return;
+  } else if (downloadPath == newPath) {
+    return;
+  }
 
   SmartDialog.showLoading(msg: '计算缓存大小中...');
   int sizeBytes = await _calculateDirSize(Directory(downloadPath));
@@ -1378,10 +1384,27 @@ Future<void> _handleMigration(BuildContext context, VoidCallback setState, Strin
     downloadPath = defDownloadPath;
     GStorage.setting.put(SettingBoxKey.downloadDirType, 0);
     GStorage.setting.delete(SettingBoxKey.downloadPath);
-  } else {
-    downloadPath = newPath;
+    GStorage.setting.delete(SettingBoxKey.downloadSafUri);
+  } else if (dirType == 2) {
+    // `newPath` is a content:// tree URI and must never land in `downloadPath`:
+    // that variable is consumed as a filesystem path (`Directory(downloadPath)`,
+    // `_relativePath`'s `startsWith`), so a URI there breaks the whole download
+    // path and flattens the SAF directory layout. The working directory is
+    // recomputed with the same helper startup uses so the two cannot drift.
+    downloadPath = await safWorkingDir();
     GStorage.setting.put(SettingBoxKey.downloadDirType, dirType);
-    GStorage.setting.put(SettingBoxKey.downloadPath, newPath);
+    GStorage.setting.put(SettingBoxKey.downloadSafUri, newPath);
+    GStorage.setting.put(SettingBoxKey.downloadPath, downloadPath);
+  } else {
+    // SD卡存储 (dirType 1): `newPath` is already a real absolute filesystem
+    // path, so unlike the SAF URI above it can back `downloadPath` directly.
+    final fsPath = newPath;
+    downloadPath = fsPath;
+    GStorage.setting.put(SettingBoxKey.downloadDirType, dirType);
+    GStorage.setting.put(SettingBoxKey.downloadPath, fsPath);
+    // Drop any stale tree URI so switching back to SD card storage cannot
+    // resurrect it through `Pref.downloadSafUri`'s legacy fallback.
+    GStorage.setting.delete(SettingBoxKey.downloadSafUri);
   }
   
   if (dirType != 2) {

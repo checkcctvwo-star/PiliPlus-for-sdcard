@@ -1003,6 +1003,20 @@ abstract final class Pref {
 
   static String? get downloadPath => _setting.get(SettingBoxKey.downloadPath);
 
+  /// The `content://` tree URI of the user-selected SAF download directory.
+  ///
+  /// Kept apart from [downloadPath] because that one is consumed as a
+  /// filesystem path (`Directory(downloadPath)`, `_relativePath`'s
+  /// `startsWith`). Releases before the split stored the tree URI there, which
+  /// silently broke both. Falls back to [downloadPath] only while it still
+  /// holds a URI, so a pre-split install keeps its SAF binding.
+  static String? get downloadSafUri {
+    final safUri = _setting.get(SettingBoxKey.downloadSafUri) as String?;
+    if (safUri != null && safUri.isNotEmpty) return safUri;
+    final legacy = downloadPath;
+    return (legacy != null && legacy.startsWith('content://')) ? legacy : null;
+  }
+
   static String? get liveCdnUrl => _setting.get(SettingBoxKey.liveCdnUrl);
 
   static bool get showBatteryLevel => _setting.get(
