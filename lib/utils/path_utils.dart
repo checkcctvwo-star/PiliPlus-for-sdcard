@@ -1,4 +1,4 @@
-import 'dart:io' show Platform;
+import 'dart:io' show File, Platform;
 
 import 'package:path/path.dart' as path;
 import 'package:path_provider/path_provider.dart';
@@ -34,6 +34,26 @@ abstract final class PathUtils {
   static const coverName = 'cover.jpg';
   static const danmakuName = 'danmaku.pb';
   static const downloadDir = 'download';
+
+  /// Whether [file] can be trusted as a decodable image on disk.
+  ///
+  /// Covers the three states a `cover.jpg` can be left in by an interrupted or
+  /// racing SD-card write: missing, present but zero-length, and present with
+  /// truncated content. Only the first is caught by `existsSync()`; a
+  /// zero-length file passes it and then fails at decode time, which without an
+  /// `errorBuilder` renders Flutter's red-cross placeholder.
+  ///
+  /// Sized content can still be corrupt, so callers must pair this with an
+  /// `errorBuilder`; this only rules out the cases decidable from metadata.
+  static bool isUsableImageFile(File file) {
+    try {
+      return file.existsSync() && file.lengthSync() > 0;
+    } catch (_) {
+      // SD card reads fail outright when the volume is unmounted or permission
+      // is denied (errno=13); treat every throw as "not usable".
+      return false;
+    }
+  }
 
   static String buildShadersAbsolutePath(
     String baseDirectory,

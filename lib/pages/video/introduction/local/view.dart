@@ -80,7 +80,7 @@ class _LocalIntroPanelState extends State<LocalIntroPanel>
                   Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      cover.existsSync()
+                      PathUtils.isUsableImageFile(cover)
                           ? ClipRRect(
                               borderRadius: Style.mdRadius,
                               child: Image.file(
@@ -100,6 +100,11 @@ class _LocalIntroPanelState extends State<LocalIntroPanel>
                                 color: NetworkImgLayer.reduce
                                     ? NetworkImgLayer.reduceLuxColor
                                     : null,
+                                errorBuilder: (_, _, _) => NetworkImgLayer(
+                                  src: entry.cover,
+                                  width: 160,
+                                  height: 100,
+                                ),
                               ),
                             )
                           : NetworkImgLayer(

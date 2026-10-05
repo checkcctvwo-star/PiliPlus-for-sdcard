@@ -172,7 +172,7 @@ class DetailItem extends StatelessWidget {
                         } else {
                           cacheHeight = maxHeight.cacheSize(context);
                         }
-                        return cover.existsSync()
+                        return PathUtils.isUsableImageFile(cover)
                             ? ClipRRect(
                                 borderRadius: Style.mdRadius,
                                 child: Image.file(
@@ -188,14 +188,14 @@ class DetailItem extends StatelessWidget {
                                   color: NetworkImgLayer.reduce
                                       ? NetworkImgLayer.reduceLuxColor
                                       : null,
+                                  errorBuilder: (_, _, _) => _coverFallback(
+                                    entry,
+                                    maxWidth,
+                                    maxHeight,
+                                  ),
                                 ),
                               )
-                            : NetworkImgLayer(
-                                src: entry.cover,
-                                width: maxWidth,
-                                height: maxHeight,
-                                cacheWidth: entry.pageData?.cacheWidth,
-                              );
+                            : _coverFallback(entry, maxWidth, maxHeight);
                       },
                     ),
                   ),
@@ -391,6 +391,23 @@ class DetailItem extends StatelessWidget {
     );
   }
 
+  /// Cover shown when the on-disk `cover.jpg` cannot be used — it is missing,
+  /// empty, or present but undecodable.
+  ///
+  /// Falls back to the network copy, whose own `errorBuilder` degrades to the
+  /// shared placeholder when the device is offline, so a bad SD-card write can
+  /// never surface Flutter's red-cross "Invalid image data" box.
+  Widget _coverFallback(
+    BiliDownloadEntryInfo entry,
+    double maxWidth,
+    double maxHeight,
+  ) => NetworkImgLayer(
+    src: entry.cover,
+    width: maxWidth,
+    height: maxHeight,
+    cacheWidth: entry.pageData?.cacheWidth,
+  );
+
   Widget entryProgress(ThemeData theme) => progressWidget(
     statusMsg: entry.status.message,
     progressStr: entry.totalBytes == 0
@@ -420,18 +437,30 @@ class DetailItem extends StatelessWidget {
           children: [
             Text(
               statusMsg,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
               style: TextStyle(
                 fontSize: 12,
                 height: 1,
                 color: color,
               ),
             ),
-            Text(
-              progressStr,
-              style: TextStyle(
-                fontSize: 12,
-                height: 1,
-                color: color,
+            // `progressStr` ("100.73M/3.01G") is the variable-width half of
+            // this Row and the side the overflow was reported on. Without a
+            // flex constraint it is measured unbounded, so once it outgrows the
+            // card the Row overflows instead of shrinking. Cap it to one line
+            // and let it ellipsize when the space is genuinely too small.
+            Flexible(
+              child: Text(
+                progressStr,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.end,
+                style: TextStyle(
+                  fontSize: 12,
+                  height: 1,
+                  color: color,
+                ),
               ),
             ),
           ],
