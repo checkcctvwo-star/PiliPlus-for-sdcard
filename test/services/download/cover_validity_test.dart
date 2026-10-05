@@ -60,9 +60,10 @@ void main() {
     });
 
     test('treats a directory path as unusable rather than throwing', () {
-      // lengthSync() on a directory throws; the guard must absorb it so a
-      // malformed entryDirPath cannot crash the download list.
-      expect(PathUtils.isUsableImageFile(tempDir), isFalse);
+      // A malformed entryDirPath can point at a directory. File.existsSync()
+      // reports false for those, so the guard short-circuits before
+      // lengthSync() (which would throw on a directory) is ever reached.
+      expect(PathUtils.isUsableImageFile(File(tempDir.path)), isFalse);
     });
 
     test('a non-empty file is still not proof of a decodable image', () {
