@@ -81,16 +81,16 @@ Future<void> _initDownPath() async {
 
     final externalStorageDirPath =
         (await getExternalStorageDirectory())?.path;
-    if (externalStorageDirPath != null) {
-      defDownloadPath = path.join(externalStorageDirPath, PathUtils.downloadDir);
-    }
+    final defaultAndroidPath = externalStorageDirPath != null
+        ? path.join(externalStorageDirPath, PathUtils.downloadDir)
+        : defDownloadPath;
 
     if (type == 2) {
       // SAF Tree URI mode
       if (customDownPath != null && customDownPath.isNotEmpty) {
         downloadPath = customDownPath;
       } else {
-        downloadPath = defDownloadPath;
+        downloadPath = defaultAndroidPath;
       }
     } else if (type == 1) {
       // External SD Card sandbox mode
@@ -106,11 +106,11 @@ Future<void> _initDownPath() async {
         } else if (customDownPath != null && customDownPath.isNotEmpty) {
           downloadPath = customDownPath;
         } else {
-          downloadPath = defDownloadPath;
+          downloadPath = defaultAndroidPath;
         }
       }
     } else {
-      downloadPath = defDownloadPath;
+      downloadPath = defaultAndroidPath;
     }
   } else {
     downloadPath = defDownloadPath;
