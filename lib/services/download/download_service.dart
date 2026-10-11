@@ -1,6 +1,6 @@
 import 'dart:async';
 import 'dart:convert' show jsonDecode, jsonEncode;
-import 'dart:io' show Directory, File;
+import 'dart:io' show Directory, File, Platform;
 
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/download.dart';
@@ -23,7 +23,10 @@ import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart'
     show kDebugMode, debugPrint, VoidCallback;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
@@ -60,6 +63,62 @@ class DownloadService extends GetxService {
 
   late Future<void> waitForInitialization;
 
+  final _isBatchProcessing = false.obs;
+  bool get isBatchProcessing => _isBatchProcessing.value;
+
+  Future<void> pauseAllTasks() async {
+    if (curDownload.value != null &&
+        curDownload.value!.status.isDownloading) {
+      curDownload.value!.status = DownloadStatus.pause;
+      curDownload.refresh();
+    }
+    for (final item in waitDownloadQueue) {
+      if (item.status == DownloadStatus.wait || item.status.isDownloading) {
+        item.status = DownloadStatus.pause;
+      }
+    }
+    waitDownloadQueue.refresh();
+
+    await cancelDownload(isDelete: false, downloadNext: false);
+    await DownloadManager.pauseDownload();
+  }
+
+  Future<void> resumeAllTasks() async {
+    if (_isBatchProcessing.value) return;
+    _isBatchProcessing.value = true;
+    try {
+      for (final item in waitDownloadQueue) {
+        if (item.status == DownloadStatus.pause ||
+            item.status == DownloadStatus.failDownload) {
+          item.status = DownloadStatus.wait;
+        }
+      }
+      waitDownloadQueue.refresh();
+      nextDownload();
+      await DownloadManager.resumeAll();
+    } finally {
+      _isBatchProcessing.value = false;
+    }
+  }
+
+  Future<void> toggleAllTasks() async {
+    if (_isBatchProcessing.value) return;
+
+    if (waitDownloadQueue.any((e) =>
+        e.status == DownloadStatus.downloading ||
+        e.status == DownloadStatus.wait)) {
+      _isBatchProcessing.value = true;
+      try {
+        await pauseAllTasks();
+        await DownloadManager.stopAll();
+      } finally {
+        _isBatchProcessing.value = false;
+      }
+    } else {
+      await resumeAllTasks();
+    }
+  }
+
   @override
   void onInit() {
     super.onInit();
@@ -67,7 +126,223 @@ class DownloadService extends GetxService {
   }
 
   void initDownloadList() {
-    waitForInitialization = _readDownloadList();
+    waitForInitialization = () async {
+      await DownloadManager.init();
+      await _readDownloadList();
+      final unfinishedTasks = await DownloadManager.getUnfinishedTasks();
+      for (final task in unfinishedTasks) {
+        final filePath = task['filePath'] as String?;
+        if (filePath == null) continue;
+
+        final match = downloadList.firstWhereOrNull((e) {
+          if (e.safFileUris != null) return false;
+          final typeTag = e.typeTag;
+          if (typeTag == null) return false;
+          final videoPath1 =
+              path.join(e.entryDirPath, typeTag, PathUtils.videoNameType1);
+          final videoPath2 =
+              path.join(e.entryDirPath, typeTag, PathUtils.videoNameType2);
+          final audioPath =
+              path.join(e.entryDirPath, typeTag, PathUtils.audioNameType2);
+          return filePath == videoPath1 ||
+              filePath == videoPath2 ||
+              filePath == audioPath;
+        });
+
+        if (match != null && !waitDownloadQueue.contains(match)) {
+          match.status = DownloadStatus.pause;
+          match.downloadedBytes =
+              (task['currentProgress'] as num?)?.toInt() ?? match.downloadedBytes;
+          waitDownloadQueue.add(match);
+        }
+      }
+    }();
+  }
+
+  /// 防 412 串行深度自愈：扫描磁盘恢复未录入的任务时，使用严格串行遍历，并在请求 B 站 API 前强制等待 600ms，彻底绕过 WAF 412 封禁
+  Future<void> deepScanRecovery() async {
+    final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue];
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+    final safUri = GStorage.setting.get('downloadPath') as String?;
+
+    final folders = <String>{};
+    final downloadPathStr = await _getDownloadPath();
+    final localDir = Directory(downloadPathStr);
+
+    if (localDir.existsSync()) {
+      await for (final dir in localDir.list()) {
+        if (dir is Directory) {
+          folders.add(path.basename(dir.path));
+        }
+      }
+    }
+
+    if (type == 2 && safUri != null && safUri.isNotEmpty && Platform.isAndroid) {
+      try {
+        final safDirs = await DownloadManager.scanSafDirectory(safUri);
+        folders.addAll(safDirs);
+      } catch (e) {
+        if (kDebugMode) {
+          debugPrint('SAF deep scan error: $e');
+        }
+      }
+    }
+
+    for (final avidStr in folders) {
+      if (avidStr.startsWith('s_')) continue; // skip bangumi for now
+      final avidPath = path.join(downloadPathStr, avidStr);
+      final dir = Directory(avidPath);
+      if (!dir.existsSync()) continue;
+
+      final cDirs = dir.listSync();
+      for (final cDir in cDirs) {
+        if (cDir is Directory) {
+          final entryFile = File(path.join(cDir.path, _entryFile));
+          if (!entryFile.existsSync()) {
+            String? typeTag;
+            final typeDirs = cDir.listSync();
+            for (final typeDir in typeDirs) {
+              if (typeDir is Directory) {
+                final potentialIndex =
+                    File(path.join(typeDir.path, _indexFile));
+                if (potentialIndex.existsSync()) {
+                  typeTag = path.basename(typeDir.path);
+                  break;
+                }
+              }
+            }
+            if (typeTag != null) {
+              try {
+                // 防 412 串行深度自愈：请求 B 站 API 前强制等待 600ms，彻底绕过 WAF 412 封禁
+                await Future.delayed(const Duration(milliseconds: 600));
+                final res = await Request.dio.get(
+                  'https://api.bilibili.com/x/web-interface/view?aid=$avidStr',
+                );
+                final data = res.data['data'];
+                if (data != null) {
+                  final title = data['title'] ?? 'Unknown';
+                  final pic = data['pic'] ?? '';
+                  final owner = data['owner']?['name'] ?? 'Unknown';
+                  final bvid = data['bvid'] ?? '';
+                  final cidStr =
+                      path.basename(cDir.path).replaceFirst('c_', '');
+                  final cid = int.tryParse(cidStr) ?? 0;
+                  int pageNum = 1;
+                  String partName = title;
+                  final pages = data['pages'];
+                  if (pages is List) {
+                    for (final p in pages) {
+                      if (p['cid'] == cid) {
+                        pageNum = p['page'] ?? 1;
+                        partName = p['part'] ?? title;
+                        break;
+                      }
+                    }
+                  }
+
+                  final pageData = PageInfo(
+                    cid: cid,
+                    page: pageNum,
+                    hasAlias: false,
+                    tid: 0,
+                    part: partName,
+                    downloadTitle: '视频已缓存完成',
+                    downloadSubtitle: title,
+                  );
+
+                  final entry = BiliDownloadEntryInfo(
+                    mediaType: 2,
+                    hasDashAudio: false,
+                    isCompleted: false,
+                    totalBytes: 0,
+                    downloadedBytes: 0,
+                    title: title,
+                    typeTag: typeTag,
+                    cover: pic,
+                    preferedVideoQuality: int.tryParse(typeTag) ?? 16,
+                    qualityPithyDescription: '',
+                    guessedTotalBytes: 0,
+                    totalTimeMilli: 0,
+                    danmakuCount: 0,
+                    timeUpdateStamp:
+                        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                    timeCreateStamp:
+                        DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                    canPlayInAdvance: true,
+                    interruptTransformTempFile: false,
+                    spid: 0,
+                    bvid: bvid,
+                    avid: int.tryParse(avidStr) ?? 0,
+                    ownerName: owner,
+                    pageData: pageData,
+                  )
+                    ..pageDirPath = dir.path
+                    ..entryDirPath = cDir.path;
+
+                  await _updateBiliDownloadEntryJson(entry);
+                }
+              } catch (e) {
+                if (kDebugMode) {
+                  debugPrint('API reconstruction error: $e');
+                }
+              }
+            }
+          }
+
+          if (entryFile.existsSync()) {
+            try {
+              final entryJson = await entryFile.readAsString();
+              final entry = BiliDownloadEntryInfo.fromJson(
+                jsonDecode(entryJson) as Map<String, dynamic>,
+              )
+                ..pageDirPath = dir.path
+                ..entryDirPath = cDir.path;
+
+              final tag = entry.typeTag;
+              if (tag != null) {
+                final typeDir = Directory(path.join(cDir.path, tag));
+                if (typeDir.existsSync()) {
+                  final videoFile = File(
+                    path.join(typeDir.path, PathUtils.videoNameType2),
+                  );
+                  final audioFile = File(
+                    path.join(typeDir.path, PathUtils.audioNameType2),
+                  );
+                  final type1File = File(
+                    path.join(typeDir.path, PathUtils.videoNameType1),
+                  );
+
+                  int actualBytes = 0;
+                  if (videoFile.existsSync()) actualBytes += videoFile.lengthSync();
+                  if (audioFile.existsSync()) actualBytes += audioFile.lengthSync();
+                  if (type1File.existsSync()) actualBytes += type1File.lengthSync();
+
+                  if (entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
+                    entry
+                      ..isCompleted = false
+                      ..status = DownloadStatus.wait;
+                    await _updateBiliDownloadEntryJson(entry);
+                    tempWaitQueue.add(entry);
+                  }
+                }
+              }
+            } catch (e) {
+              if (kDebugMode) {
+                debugPrint('Integrity check error: $e');
+              }
+            }
+          }
+        }
+      }
+    }
+    waitDownloadQueue.assignAll(tempWaitQueue.toSet().toList());
+
+    await _readDownloadList();
+    waitDownloadQueue.refresh();
+    flagNotifier.refresh();
   }
 
   Future<void> _readDownloadList() async {
@@ -247,12 +522,11 @@ class DownloadService extends GetxService {
 
   Future<void> _createDownload(BiliDownloadEntryInfo entry) async {
     final entryDir = await _getDownloadEntryDir(entry);
-    final entryJsonFile = File(path.join(entryDir.path, _entryFile));
-    await entryJsonFile.writeAsString(jsonEncode(entry.toJson()));
     entry
       ..pageDirPath = entryDir.parent.path
       ..entryDirPath = entryDir.path
       ..status = DownloadStatus.wait;
+    await _updateBiliDownloadEntryJson(entry);
     waitDownloadQueue.add(entry);
     if (curDownload.value?.status.isDownloading != true) {
       startDownload(entry);
@@ -513,9 +787,18 @@ class DownloadService extends GetxService {
     }
   }
 
-  Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) {
+  Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) async {
     final entryJsonFile = File(path.join(entry.entryDirPath, _entryFile));
-    return entryJsonFile.writeAsString(jsonEncode(entry.toJson()));
+    final tmpFile = File('${entryJsonFile.path}.tmp');
+    await tmpFile.writeAsString(jsonEncode(entry.toJson()), flush: true);
+    try {
+      await tmpFile.rename(entryJsonFile.path);
+    } catch (_) {
+      if (entryJsonFile.existsSync()) {
+        await entryJsonFile.delete();
+      }
+      await tmpFile.rename(entryJsonFile.path);
+    }
   }
 
   void _onReceive(int progress, int total) {
@@ -573,6 +856,40 @@ class DownloadService extends GetxService {
     if (entry == null) {
       return;
     }
+
+    // 混流管道接入：当视频与音频下载完成时，调用 DownloadManager.mergeDashMedia 将 video.m4s 与 audio.m4s 混流为标准 0.mp4
+    final typeTag = entry.typeTag;
+    if (typeTag != null) {
+      final videoDir = Directory(path.join(entry.entryDirPath, typeTag));
+      final videoPath = path.join(videoDir.path, PathUtils.videoNameType2);
+      final audioPath = path.join(videoDir.path, PathUtils.audioNameType2);
+      final outputPath = path.join(videoDir.path, PathUtils.videoNameType1);
+
+      if (File(videoPath).existsSync() && File(audioPath).existsSync()) {
+        try {
+          final success = await DownloadManager.mergeDashMedia(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+          );
+          if (success && File(outputPath).existsSync()) {
+            final outputFile = File(outputPath);
+            final length = await outputFile.length();
+            entry
+              ..mediaType = 1
+              ..totalBytes = length
+              ..downloadedBytes = length;
+            await File(videoPath).tryDel();
+            await File(audioPath).tryDel();
+          }
+        } catch (e) {
+          if (kDebugMode) {
+            debugPrint('mergeDashMedia error: $e');
+          }
+        }
+      }
+    }
+
     entry
       ..downloadedBytes = entry.totalBytes
       ..isCompleted = true;

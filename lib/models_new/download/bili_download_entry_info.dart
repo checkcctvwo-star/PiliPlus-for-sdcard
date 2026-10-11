@@ -44,6 +44,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
   EpInfo? ep;
   List<SegmentItemModel>? segments;
   SeasonInfo? seasonInfo;
+  Map<String, String>? safFileUris;
 
   late String pageDirPath;
   late String entryDirPath;
@@ -172,6 +173,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
     this.ep,
     this.segments,
     this.seasonInfo,
+    this.safFileUris,
   });
 
   factory BiliDownloadEntryInfo.fromJson(Map<String, dynamic> json) =>
@@ -214,6 +216,10 @@ class BiliDownloadEntryInfo with MultiSelectData {
         seasonInfo: json['season_info'] != null
             ? SeasonInfo.fromJson(json['season_info'] as Map<String, dynamic>)
             : null,
+        safFileUris: json['saf_file_uris'] != null
+            ? (json['saf_file_uris'] as Map<String, dynamic>)
+                .map((key, value) => MapEntry(key, value as String))
+            : null,
       );
 
   Map<String, dynamic> toJson() => <String, dynamic>{
@@ -246,6 +252,7 @@ class BiliDownloadEntryInfo with MultiSelectData {
     'ep': ?ep?.toJson(),
     'segments': ?segments?.map((e) => e.toJson()).toList(),
     'season_info': ?seasonInfo?.toJson(),
+    'saf_file_uris': ?safFileUris,
   };
 
   @override
@@ -254,13 +261,13 @@ class BiliDownloadEntryInfo with MultiSelectData {
       return true;
     }
     if (other is BiliDownloadEntryInfo) {
-      return cid == other.cid;
+      return avid == other.avid && cid == other.cid;
     }
     return false;
   }
 
   @override
-  int get hashCode => cid.hashCode;
+  int get hashCode => Object.hash(avid, cid);
 }
 
 class SeasonInfo {
@@ -486,6 +493,7 @@ enum DownloadStatus {
   failPlayUrl('获取播放地址失败'),
   pause('暂停中'),
   wait('等待中'),
+  corrupted('文件已损坏'),
   ;
 
   final String message;

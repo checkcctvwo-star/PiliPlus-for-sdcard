@@ -235,6 +235,16 @@ abstract final class Pref {
     defaultValue: VideoQuality.high1080.code,
   );
 
+  static bool get allowCellularDownload => _setting.get(
+    SettingBoxKey.allowCellularDownload,
+    defaultValue: false,
+  );
+
+  static bool get autoResumeDownloads => _setting.get(
+    SettingBoxKey.autoResumeDownloads,
+    defaultValue: true,
+  );
+
   static int get defaultAudioQa => _setting.get(
     SettingBoxKey.defaultAudioQa,
     defaultValue: AudioQuality.hiRes.code,

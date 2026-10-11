@@ -1,0 +1,147 @@
+name: Android Release Build (SD Card Fix)
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.agents/**'
+      - '.worktrees/**'
+      - 'docs/**'
+      - 'tools/**'
+  workflow_dispatch:
+    inputs:
+      tag_suffix:
+        description: 'Release tag suffix (e.g. v2.1.9+7). Leave empty to auto-generate.'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  android-release:
+    name: Build Android Release APK (arm64 + arm32 + x86_64)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # needed to create GitHub Release
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+          cache: 'gradle'
+          cache-dependency-path: |
+            android/*.gradle*
+            android/**/gradle-wrapper.properties
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version-file: pubspec.yaml
+          cache: true
+
+      - name: Flutter pub get
+        run: flutter pub get
+
+      # 本仓库依赖 Flutter SDK 补丁才能编译
+      - name: Apply Patch
+        shell: pwsh
+        run: lib/scripts/patch.ps1 android
+
+      # Build release APKs split by ABI — signed with default debug keystore
+      - name: Build Release APKs (split per ABI)
+        run: |
+          flutter build apk \
+            --release \
+            --split-per-abi \
+            --no-pub
+
+      # Generate a timestamp-based tag or use user-supplied suffix
+      - name: Generate release tag
+        id: tag
+        run: |
+          SUFFIX="${{ github.event.inputs.tag_suffix }}"
+          if [ -z "$SUFFIX" ]; then
+            SUFFIX="v2.1.9-sd-$(date +'%Y%m%d-%H%M')"
+          fi
+          TAG="${SUFFIX}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Release tag: ${TAG}"
+
+      # Rename APKs to meaningful names
+      - name: Rename APKs
+        shell: bash
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          for file in build/app/outputs/flutter-apk/app-*-release.apk; do
+            abi=$(echo "$file" | sed -E 's|.*app-(.*)-release\.apk|\1|')
+            dest="piliplus_${TAG}_${abi}.apk"
+            mv "$file" "$dest"
+            echo "Renamed: $file -> $dest"
+          done
+
+      # Upload each ABI as a separate artifact (available 90 days)
+      - name: Upload arm64-v8a APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus-sdcard-arm64-v8a
+          path: piliplus_*_arm64-v8a.apk
+          retention-days: 90
+
+      - name: Upload armeabi-v7a APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus-sdcard-armeabi-v7a
+          path: piliplus_*_armeabi-v7a.apk
+          retention-days: 90
+
+      - name: Upload x86_64 APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PiliPlus-sdcard-x86_64
+          path: piliplus_*_x86_64.apk
+          retention-days: 90
+
+      # Create a pre-release on GitHub Releases with all three APKs
+      - name: Create GitHub Pre-Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          prerelease: true
+          name: "PiliPlus SD – ${{ steps.tag.outputs.tag }}"
+          body: |
+            ## PiliPlus SD 专属预发布版 (${{ steps.tag.outputs.tag }})
+
+            ### 🚀 核心更新与技术重构
+            1. **上游最新 v2.1.6.2 代码完全同步**：无损继承 SponsorBlock 片段跳过、UGC/PGC 视频合集离线下载等最新能力。
+            2. **借鉴 BiliTools 16KB FFmpegKit 混流引擎**：
+               - 下载后自动触发原生 FFmpegKit (`-c copy -shortest -strict unofficial -movflags +faststart`) 将分离的 `video.m4s` 与 `audio.m4s` 合并为标准 `0.mp4`；
+               - 16KB Page Size 完美适配 Android 15/16 设备，杜绝动态库载入奔溃；
+               - 彻底终结 libmpv `edl://` 播放双流导致的音画不同步、黑屏打不开问题。
+            3. **外置 SD 卡双轨存储与 POSIX 直读直写**：
+               - 优先使用外置 SD 卡应用专属沙盒目录 (`/storage/XXXX-XXXX/Android/data/com.example.piliplus.sd/files/download`)；
+               - 无需任何繁琐 SAF 授权，获得 100% 原生 POSIX 读写权限，libmpv 秒级直启播放。
+            4. **工业级断点续传与网络防封**：
+               - 粘性 If-Range 校验器，精准处理 206 / 200 / 416 状态码；
+               - 强效 Content-Length 终态完整性校验，杜绝残缺切片；
+               - 600ms 串行退避扫描机制，彻底绕过 B 站风控 WAF 412。
+            5. **原子级元数据持久化**：
+               - 去中心化 `entry.json` 采用 `.tmp` + POSIX rename 原子替换，防止杀后台损坏元数据。
+
+            ### 📦 APK 安装包说明
+            | 安装包文件 | 适用芯片架构 | 推荐设备 |
+            |---|---|---|
+            | `piliplus_*_arm64-v8a.apk` | 64 位 ARM | 绝大多数现代手机与平板 (华为/小米/联想等) |
+            | `piliplus_*_armeabi-v7a.apk` | 32 位 ARM | 较旧的安卓设备 |
+            | `piliplus_*_x86_64.apk` | x86_64 | 电脑安卓模拟器 |
+
+            > ⚠️ 本版本包名为 `com.example.piliplus.sd`，应用名为 `PiliPlus SD`，采用一致的 Debug 签名构建，可直接覆盖安装后续同款更新。
+          files: piliplus_*.apk

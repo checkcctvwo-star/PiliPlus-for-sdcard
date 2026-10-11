@@ -28,7 +28,8 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.piliplus"
+        applicationId = "com.example.piliplus.sd"
+        resValue(type = "string", name = "app_name", value = "PiliPlus SD")
         minSdk = flutter.minSdkVersion
         targetSdk = 37
         versionCode = flutter.versionCode
@@ -55,9 +56,7 @@ android {
     }
 
     buildFeatures {
-        if (project.hasProperty("dev")) {
-            resValues = true
-        }
+        resValues = true
     }
 
     buildTypes {
@@ -99,4 +98,11 @@ kotlin {
 
 flutter {
     source = "../.."
+}
+
+dependencies {
+    implementation("androidx.documentfile:documentfile:1.0.1")
+    implementation("io.github.jamaismagic.ffmpeg:ffmpeg-kit-main-16kb:6.1.7")
+    implementation("me.laoyuyu.aria:core:3.8.16")
+    annotationProcessor("me.laoyuyu.aria:compiler:3.8.16")
 }

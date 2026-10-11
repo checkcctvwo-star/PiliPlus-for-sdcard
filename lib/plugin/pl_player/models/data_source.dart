@@ -1,3 +1,5 @@
+import 'dart:io' show File;
+
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:path/path.dart' as path;
 
@@ -22,19 +24,33 @@ class FileSource extends DataSource {
   final String dir;
   final bool isMp4;
 
-  FileSource({
-    required this.dir,
-    required this.isMp4,
+  factory FileSource({
+    required String dir,
+    required bool isMp4,
     required bool hasDashAudio,
     required String typeTag,
-  }) : super(
-         videoSource: path.join(
-           dir,
-           typeTag,
-           isMp4 ? PathUtils.videoNameType1 : PathUtils.videoNameType2,
-         ),
-         audioSource: isMp4 || !hasDashAudio
-             ? null
-             : path.join(dir, typeTag, PathUtils.audioNameType2),
-       );
+  }) {
+    final effectiveIsMp4 = isMp4 ||
+        File(path.join(dir, typeTag, PathUtils.videoNameType1)).existsSync();
+    return FileSource._(
+      dir: dir,
+      isMp4: effectiveIsMp4,
+      videoSource: path.join(
+        dir,
+        typeTag,
+        effectiveIsMp4 ? PathUtils.videoNameType1 : PathUtils.videoNameType2,
+      ),
+      audioSource: effectiveIsMp4 || !hasDashAudio
+          ? null
+          : path.join(dir, typeTag, PathUtils.audioNameType2),
+    );
+  }
+
+  FileSource._({
+    required this.dir,
+    required this.isMp4,
+    required super.videoSource,
+    required super.audioSource,
+  });
 }
+

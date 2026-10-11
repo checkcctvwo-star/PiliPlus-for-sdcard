@@ -12,6 +12,7 @@ import 'package:PiliPlus/models/common/theme/theme_color_type.dart';
 import 'package:PiliPlus/plugin/pl_player/utils/fullscreen.dart';
 import 'package:PiliPlus/router/app_pages.dart';
 import 'package:PiliPlus/services/account_service.dart';
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/services/logger.dart';
 import 'package:PiliPlus/services/service_locator.dart';
@@ -74,10 +75,34 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (Platform.isAndroid) {
-    final externalStorageDirPath = (await getExternalStorageDirectory())?.path;
-    downloadPath = externalStorageDirPath != null
-        ? path.join(externalStorageDirPath, PathUtils.downloadDir)
-        : defDownloadPath;
+    final type =
+        GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
+    final customDownPath = Pref.downloadPath;
+    if (type == 1) {
+      if (customDownPath != null &&
+          customDownPath.isNotEmpty &&
+          Directory(customDownPath).existsSync()) {
+        downloadPath = customDownPath;
+      } else {
+        final sdPath = await DownloadManager.getExternalSDCardPath();
+        if (sdPath != null && sdPath.isNotEmpty) {
+          downloadPath = sdPath;
+          await GStorage.setting.put(SettingBoxKey.downloadPath, sdPath);
+        } else {
+          final externalStorageDirPath =
+              (await getExternalStorageDirectory())?.path;
+          downloadPath = externalStorageDirPath != null
+              ? path.join(externalStorageDirPath, PathUtils.downloadDir)
+              : defDownloadPath;
+        }
+      }
+    } else {
+      final externalStorageDirPath =
+          (await getExternalStorageDirectory())?.path;
+      downloadPath = externalStorageDirPath != null
+          ? path.join(externalStorageDirPath, PathUtils.downloadDir)
+          : defDownloadPath;
+    }
   } else {
     downloadPath = defDownloadPath;
   }

@@ -157,6 +157,9 @@ abstract final class SettingBoxKey {
       angleDegrees = 'angleDegrees',
       liveStream = 'liveStream',
       enableDocProvider = 'enableDocProvider',
+      downloadDirType = 'downloadDirType',
+      allowCellularDownload = 'allowCellularDownload',
+      autoResumeDownloads = 'autoResumeDownloads',
       enableEmoteTooltip = 'enableEmoteTooltip';
 
   static const String minimizeOnExit = 'minimizeOnExit',
