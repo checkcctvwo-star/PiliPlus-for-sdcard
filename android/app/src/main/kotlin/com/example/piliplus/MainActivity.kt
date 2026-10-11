@@ -6,10 +6,12 @@ import android.content.res.Configuration
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.WindowManager.LayoutParams
 import androidx.documentfile.provider.DocumentFile
 import com.arialyy.aria.core.Aria
 import com.example.piliplus.media.MediaMuxerBridge
+import com.example.piliplus.storage.SafStorageBridge
 import com.ryanheise.audioservice.AudioServiceActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -21,16 +23,17 @@ import java.io.FileNotFoundException
 import java.util.concurrent.Executors
 
 class MainActivity : AudioServiceActivity() {
+    private val TAG = "MainActivity"
     private val REQUEST_CODE_OPEN_DOCUMENT_TREE = 42
     private var pendingDirectoryResult: MethodChannel.Result? = null
     private val safExecutor = Executors.newFixedThreadPool(1)
-    
+
     private var migrationJob: Job? = null
     private var progressSink: EventChannel.EventSink? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        
+
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, "saf_migration_progress").setStreamHandler(
             object : EventChannel.StreamHandler {
                 override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
@@ -45,12 +48,12 @@ class MainActivity : AudioServiceActivity() {
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "com.piliplus/download").setMethodCallHandler { call, result ->
             when (call.method) {
-                // ── FFmpeg DASH Muxing ───────────────────────────────────────────
+                // ── DASH Media Muxing ────────────────────────────────────────────
                 "mergeDashMedia" -> {
                     val videoPath = call.argument<String>("videoPath")
                     val audioPath = call.argument<String>("audioPath")
                     val outputPath = call.argument<String>("outputPath")
-                    val transcodeAudioToAac = call.argument<Boolean>("transcodeAudioToAac") ?: false
+                    val forceAudioTranscode = call.argument<Boolean>("transcodeAudioToAac") ?: false
 
                     if (videoPath == null || audioPath == null || outputPath == null) {
                         result.error("INVALID_ARGS", "videoPath, audioPath, or outputPath is null", null)
@@ -62,7 +65,7 @@ class MainActivity : AudioServiceActivity() {
                             videoPath = videoPath,
                             audioPath = audioPath,
                             outputPath = outputPath,
-                            transcodeAudioToAac = transcodeAudioToAac
+                            forceAudioTranscode = forceAudioTranscode
                         )
                         if (muxResult.isSuccess) {
                             result.success(true)
@@ -72,18 +75,117 @@ class MainActivity : AudioServiceActivity() {
                     }
                 }
 
+                // ── Staging to Target Atomic Commit ──────────────────────────────
+                "commitStagingEntry" -> {
+                    val stagingEntryPath = call.argument<String>("stagingEntryPath")
+                    val targetType = call.argument<Int>("targetType") ?: 0
+                    val targetBaseDir = call.argument<String>("targetBaseDir")
+                    val relativePath = call.argument<String>("relativePath")
+
+                    if (stagingEntryPath == null || targetBaseDir == null || relativePath == null) {
+                        result.error("INVALID_ARGS", "Missing staging commit args", null)
+                        return@setMethodCallHandler
+                    }
+
+                    CoroutineScope(Dispatchers.IO).launch {
+                        try {
+                            val stagingDir = File(stagingEntryPath)
+                            if (!stagingDir.exists() || !stagingDir.isDirectory) {
+                                withContext(Dispatchers.Main) { result.error("DIR_NOT_FOUND", "Staging dir missing", null) }
+                                return@launch
+                            }
+
+                            if (targetType == 2) {
+                                // SAF Mode: commit all files recursively into SAF DocumentFile tree
+                                val files = stagingDir.walkTopDown().filter { it.isFile }.toList()
+                                for (file in files) {
+                                    val fileSubRel = file.relativeTo(stagingDir).path
+                                    val subFolder = if (fileSubRel.contains(File.separator)) {
+                                        "$relativePath/${fileSubRel.substringBeforeLast(File.separator)}"
+                                    } else {
+                                        relativePath
+                                    }
+                                    val commitRes = SafStorageBridge.commitFileToSaf(
+                                        context = this@MainActivity,
+                                        srcFilePath = file.absolutePath,
+                                        treeUriString = targetBaseDir,
+                                        relativeSubDirPath = subFolder,
+                                        fileName = file.name
+                                    )
+                                    if (commitRes.isFailure) {
+                                        throw commitRes.exceptionOrNull() ?: Exception("Failed to commit ${file.name} to SAF")
+                                    }
+                                }
+                                stagingDir.deleteRecursively()
+                                withContext(Dispatchers.Main) { result.success(true) }
+                            } else {
+                                // POSIX Mode (0: internal app storage, 1: external SD card sandbox)
+                                val targetDir = File(targetBaseDir, relativePath)
+                                targetDir.mkdirs()
+                                stagingDir.copyRecursively(targetDir, overwrite = true)
+                                stagingDir.deleteRecursively()
+                                withContext(Dispatchers.Main) { result.success(true) }
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "commitStagingEntry failed", e)
+                            withContext(Dispatchers.Main) { result.error("COMMIT_FAILED", e.message, e.toString()) }
+                        }
+                    }
+                }
+
+                // ── SAF Tree Recursive Scanning ──────────────────────────────────
+                "scanSafEntries" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString == null) {
+                        result.error("INVALID_ARGS", "uri is null", null)
+                        return@setMethodCallHandler
+                    }
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val list = SafStorageBridge.scanEntriesFromSaf(this@MainActivity, uriString)
+                        withContext(Dispatchers.Main) { result.success(list) }
+                    }
+                }
+
+                // ── Calculate Directory Size (POSIX or SAF) ──────────────────────
+                "calculateDirSize" -> {
+                    val path = call.argument<String>("path")
+                    if (path == null) {
+                        result.success(0L)
+                        return@setMethodCallHandler
+                    }
+                    CoroutineScope(Dispatchers.IO).launch {
+                        val size = if (path.startsWith("content://")) {
+                            SafStorageBridge.calculateSafSize(this@MainActivity, path)
+                        } else {
+                            val dir = File(path)
+                            if (dir.exists()) {
+                                dir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+                            } else {
+                                0L
+                            }
+                        }
+                        withContext(Dispatchers.Main) { result.success(size) }
+                    }
+                }
+
                 // ── External SD Card Path Bridge ─────────────────────────────────
                 "getExternalSDCardPath" -> {
                     val externalDirs = getExternalFilesDirs(null)
-                    if (externalDirs.size > 1 && externalDirs[1] != null) {
-                        val sdCardDownloadDir = File(externalDirs[1]!!, "download")
-                        if (!sdCardDownloadDir.exists()) {
-                            sdCardDownloadDir.mkdirs()
+                    var foundPath: String? = null
+                    if (externalDirs.size > 1) {
+                        for (i in 1 until externalDirs.size) {
+                            val dir = externalDirs[i]
+                            if (dir != null) {
+                                val sdCardDownloadDir = File(dir, "download")
+                                if (!sdCardDownloadDir.exists()) {
+                                    sdCardDownloadDir.mkdirs()
+                                }
+                                foundPath = sdCardDownloadDir.absolutePath
+                                break
+                            }
                         }
-                        result.success(sdCardDownloadDir.absolutePath)
-                    } else {
-                        result.success(null)
                     }
+                    result.success(foundPath)
                 }
 
                 // ── Aria Download Control ────────────────────────────────────────
@@ -138,7 +240,9 @@ class MainActivity : AudioServiceActivity() {
                 // ── SAF Storage Access Framework ─────────────────────────────────
                 "selectCustomDirectory" -> {
                     pendingDirectoryResult = result
-                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE)
+                    val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+                    }
                     startActivityForResult(intent, REQUEST_CODE_OPEN_DOCUMENT_TREE)
                 }
                 "getCustomDirectoryUri" -> {
@@ -166,66 +270,27 @@ class MainActivity : AudioServiceActivity() {
                                 runOnUiThread { result.error("NO_SAF_URI", "custom SAF directory is not set", null) }
                                 return@execute
                             }
-                            val root = DocumentFile.fromTreeUri(this, Uri.parse(safUriString))
-                            if (root == null) {
-                                runOnUiThread { result.error("SAF_INVALID", "cannot resolve SAF directory", null) }
-                                return@execute
-                            }
-                            var dir: DocumentFile? = root
-                            if (targetDir != null && targetDir.isNotEmpty()) {
-                                for (segment in targetDir.split("/")) {
-                                    if (segment.isEmpty()) continue
-                                    val current = dir ?: break
-                                    val childDir = current.findFile(segment)
-                                    dir = if (childDir != null && childDir.isDirectory) {
-                                        childDir
-                                    } else {
-                                        current.createDirectory(segment)
-                                    }
-                                    if (dir == null) {
-                                        runOnUiThread { result.error("CREATE_DIR_FAILED", "cannot create directory $segment", null) }
-                                        return@execute
-                                    }
-                                }
-                            }
-                            val dirResolved = dir
-                            if (dirResolved == null) {
-                                runOnUiThread { result.error("CREATE_DIR_FAILED", "cannot resolve target directory", null) }
-                                return@execute
-                            }
                             val srcFile = File(srcPath)
                             val fileName = srcFile.name
-                            val mimeType = getMimeTypeFromExtension(fileName)
-                            val tmpName = ".$fileName.tmp"
-                            var newFile = dirResolved.findFile(tmpName)
-                            if (newFile == null) {
-                                newFile = dirResolved.createFile(mimeType, tmpName)
-                            }
-                            if (newFile == null) {
-                                runOnUiThread { result.error("CREATE_FILE_FAILED", "cannot create file $fileName", null) }
-                                return@execute
-                            }
-                            try {
-                                val os = contentResolver.openOutputStream(newFile.uri)
-                                    ?: throw java.io.IOException("Failed to open SAF output stream (returned null)")
-                                os.use { outStream ->
-                                    FileInputStream(srcFile).use { inputStream ->
-                                        inputStream.copyTo(outStream)
-                                        outStream.flush()
+                            val relativePath = targetDir ?: ""
+                            CoroutineScope(Dispatchers.IO).launch {
+                                val commitRes = SafStorageBridge.commitFileToSaf(
+                                    context = this@MainActivity,
+                                    srcFilePath = srcFile.absolutePath,
+                                    treeUriString = safUriString,
+                                    relativeSubDirPath = relativePath,
+                                    fileName = fileName
+                                )
+                                withContext(Dispatchers.Main) {
+                                    if (commitRes.isSuccess) {
+                                        result.success(commitRes.getOrNull())
+                                    } else {
+                                        result.error("SAVE_FAILED", commitRes.exceptionOrNull()?.message, null)
                                     }
                                 }
-                            } catch (e: Exception) {
-                                runOnUiThread { result.error("SAF_COPY_FAILED", e.message, e.toString()) }
-                                return@execute
                             }
-                            dirResolved.findFile(fileName)?.delete()
-                            if (!newFile.renameTo(fileName)) {
-                                runOnUiThread { result.error("SAF_RENAME_FAILED", "renameTo returned false", null) }
-                                return@execute
-                            }
-                            runOnUiThread { result.success(newFile.uri.toString()) }
                         } catch (e: Exception) {
-                            runOnUiThread { result.error("SAF_COPY_FAILED", e.message, e.toString()) }
+                            runOnUiThread { result.error("SAVE_FAILED", e.message, e.toString()) }
                         }
                     }
                 }
@@ -278,15 +343,19 @@ class MainActivity : AudioServiceActivity() {
                     }
 
                     migrationJob?.cancel()
-                    
+
                     migrationJob = CoroutineScope(Dispatchers.IO).launch {
                         try {
+                            // If oldPath is not a valid directory or is SAF URI, no POSIX files to copy; succeed directly
                             val oldDir = File(oldPath)
                             if (!oldDir.exists() || !oldDir.isDirectory) {
-                                withContext(Dispatchers.Main) { result.error("INVALID_PATH", "oldPath is not a valid directory", null) }
+                                withContext(Dispatchers.Main) {
+                                    progressSink?.success(mapOf("transferred" to 0.0, "total" to 0.0))
+                                    result.success(true)
+                                }
                                 return@launch
                             }
-                            
+
                             val allFiles = mutableListOf<File>()
                             fun collectFiles(dir: File) {
                                 val files = dir.listFiles() ?: return
@@ -296,72 +365,52 @@ class MainActivity : AudioServiceActivity() {
                                 }
                             }
                             collectFiles(oldDir)
-                            
+
                             val totalBytes = allFiles.sumOf { it.length() }.toDouble()
                             var bytesCopied = 0.0
 
-                            val newRootSaf = if (newType == 2) DocumentFile.fromTreeUri(this@MainActivity, Uri.parse(newPath)) else null
-                            if (newType == 2 && newRootSaf == null) {
-                                throw Exception("cannot resolve new SAF directory")
+                            if (allFiles.isEmpty()) {
+                                withContext(Dispatchers.Main) {
+                                    progressSink?.success(mapOf("transferred" to 0.0, "total" to 0.0))
+                                    result.success(true)
+                                }
+                                return@launch
                             }
 
                             for (file in allFiles) {
                                 ensureActive()
-                                
                                 val relPath = file.absolutePath.removePrefix(oldDir.absolutePath).removePrefix("/")
-                                val mimeType = getMimeTypeFromExtension(file.name)
-                                
-                                val outStream = if (newType == 2) {
-                                    var currentSaf = newRootSaf!!
-                                    val parts = relPath.split("/")
-                                    for (i in 0 until parts.size - 1) {
-                                        val part = parts[i]
-                                        var nextSaf = currentSaf.findFile(part)
-                                        if (nextSaf == null) {
-                                            nextSaf = currentSaf.createDirectory(part)
-                                        }
-                                        currentSaf = nextSaf ?: throw Exception("Failed to create SAF dir: $part")
+                                val parentRel = if (relPath.contains(File.separator)) relPath.substringBeforeLast(File.separator) else ""
+                                val fileName = file.name
+
+                                if (newType == 2) {
+                                    val commitRes = SafStorageBridge.commitFileToSaf(
+                                        context = this@MainActivity,
+                                        srcFilePath = file.absolutePath,
+                                        treeUriString = newPath,
+                                        relativeSubDirPath = parentRel,
+                                        fileName = fileName
+                                    )
+                                    if (commitRes.isFailure) {
+                                        throw commitRes.exceptionOrNull() ?: Exception("Migration failed for $fileName")
                                     }
-                                    val fileName = parts.last()
-                                    var destFileSaf = currentSaf.findFile(fileName)
-                                    if (destFileSaf == null) {
-                                        destFileSaf = currentSaf.createFile(mimeType, fileName)
-                                    }
-                                    contentResolver.openOutputStream(destFileSaf!!.uri) ?: throw Exception("Failed to open SAF stream")
                                 } else {
                                     val destFile = File(newPath, relPath)
                                     destFile.parentFile?.mkdirs()
-                                    destFile.outputStream()
+                                    file.copyTo(destFile, overwrite = true)
+                                    file.delete()
                                 }
 
-                                outStream.use { os ->
-                                    FileInputStream(file).use { input ->
-                                        val buffer = ByteArray(256 * 1024)
-                                        var bytes = input.read(buffer)
-                                        var lastTime = System.currentTimeMillis()
-                                        while (bytes >= 0) {
-                                            ensureActive()
-                                            os.write(buffer, 0, bytes)
-                                            bytesCopied += bytes
-                                            
-                                            val now = System.currentTimeMillis()
-                                            if (now - lastTime > 150 && totalBytes > 0) {
-                                                lastTime = now
-                                                withContext(Dispatchers.Main) {
-                                                    progressSink?.success(mapOf(
-                                                        "transferred" to bytesCopied,
-                                                        "total" to totalBytes,
-                                                        "currentFile" to relPath
-                                                    ))
-                                                }
-                                            }
-                                            bytes = input.read(buffer)
-                                        }
-                                        os.flush()
-                                    }
+                                bytesCopied += file.length()
+                                withContext(Dispatchers.Main) {
+                                    progressSink?.success(mapOf(
+                                        "transferred" to bytesCopied,
+                                        "total" to totalBytes,
+                                        "currentFile" to relPath
+                                    ))
                                 }
                             }
-                            
+
                             fun deleteRecursively(f: File) {
                                 if (f.isDirectory) {
                                     f.listFiles()?.forEach { deleteRecursively(it) }
@@ -369,7 +418,7 @@ class MainActivity : AudioServiceActivity() {
                                 f.delete()
                             }
                             deleteRecursively(oldDir)
-                            
+
                             withContext(Dispatchers.Main) {
                                 progressSink?.success(mapOf("transferred" to totalBytes, "total" to totalBytes))
                                 result.success(true)
@@ -377,6 +426,7 @@ class MainActivity : AudioServiceActivity() {
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
+                            Log.e(TAG, "startMigration error", e)
                             withContext(Dispatchers.Main) {
                                 result.error("MIGRATION_FAILED", e.message, e.toString())
                             }
@@ -401,10 +451,8 @@ class MainActivity : AudioServiceActivity() {
         if (requestCode == REQUEST_CODE_OPEN_DOCUMENT_TREE) {
             if (resultCode == RESULT_OK) {
                 data?.data?.let { uri ->
-                    contentResolver.takePersistableUriPermission(
-                        uri,
-                        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-                    )
+                    val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                    contentResolver.takePersistableUriPermission(uri, flags)
                     val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
                     prefs.edit().putString("custom_saf_uri", uri.toString()).apply()
                     pendingDirectoryResult?.success(uri.toString())
@@ -433,11 +481,6 @@ class MainActivity : AudioServiceActivity() {
             window.attributes.layoutInDisplayCutoutMode =
                 LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
-    }
-
-    private fun getMimeTypeFromExtension(fileName: String): String {
-        val extension = android.webkit.MimeTypeMap.getFileExtensionFromUrl(fileName)
-        return android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension) ?: "application/octet-stream"
     }
 
     override fun onDestroy() {

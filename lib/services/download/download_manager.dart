@@ -40,6 +40,53 @@ class DownloadManager {
     }
   }
 
+  /// 将暂存目录中的条目提交到目标目录（POSIX 或 SAF）
+  static Future<bool> commitStagingEntry({
+    required String stagingEntryPath,
+    required int targetType,
+    required String targetBaseDir,
+    required String relativePath,
+  }) async {
+    try {
+      final res = await _channel.invokeMethod<bool>('commitStagingEntry', {
+        'stagingEntryPath': stagingEntryPath,
+        'targetType': targetType,
+        'targetBaseDir': targetBaseDir,
+        'relativePath': relativePath,
+      });
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// 扫描 SAF 树形目录
+  static Future<List<Map<String, dynamic>>> scanSafEntries(String uri) async {
+    try {
+      final List<dynamic>? res = await _channel.invokeListMethod<dynamic>(
+        'scanSafEntries',
+        {'uri': uri},
+      );
+      if (res != null) {
+        return res.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+    } catch (_) {}
+    return [];
+  }
+
+  /// 计算目录大小（支持 POSIX 路径和 content:// SAF 路径）
+  static Future<int> calculateDirSize(String path) async {
+    try {
+      final res = await _channel.invokeMethod<int>('calculateDirSize', {
+        'path': path,
+      });
+      return res ?? 0;
+    } catch (_) {
+      return 0;
+    }
+  }
+
+
   /// 初始化网络监听并恢复失败的任务
   static Future<void> init() async {
     try {

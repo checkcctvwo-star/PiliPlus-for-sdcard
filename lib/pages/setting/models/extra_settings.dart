@@ -30,6 +30,7 @@ import 'package:PiliPlus/pages/setting/models/model.dart';
 import 'package:PiliPlus/pages/setting/widgets/select_dialog.dart';
 import 'package:PiliPlus/pages/setting/widgets/slider_dialog.dart';
 import 'package:PiliPlus/pages/video/reply/widgets/reply_item_grpc.dart';
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
@@ -1263,7 +1264,7 @@ Future<void> _handleMigration(BuildContext context, VoidCallback setState, Strin
   if (downloadPath == newPath) return;
 
   SmartDialog.showLoading(msg: '计算缓存大小中...');
-  int sizeBytes = await _calculateDirSize(Directory(downloadPath));
+  int sizeBytes = await DownloadManager.calculateDirSize(downloadPath);
   SmartDialog.dismiss();
 
   if (sizeBytes > 500 * 1024 * 1024) {
@@ -1398,57 +1399,48 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
   showDialog(
     context: context,
     builder: (context) {
-      return FutureBuilder<List<Directory>?>(
-        future: getExternalStorageDirectories(),
-        builder: (context, snapshot) {
-          bool hasSdCard = false;
-          if (snapshot.hasData && snapshot.data != null) {
-            hasSdCard = snapshot.data!.length > 1;
-          }
-          
-          return SimpleDialog(
-            title: const Text('选择下载目录'),
-            clipBehavior: Clip.hardEdge,
-            contentPadding: const EdgeInsets.symmetric(vertical: 12),
-            children: [
-              DialogOption(
-                onPressed: () async {
-                  await _handleMigration(context, setState, defDownloadPath, 0, '已恢复本机存储 (重启生效)');
-                },
-                child: const Text('1. 本机存储 (默认)', style: TextStyle(fontSize: 14)),
-              ),
-              DialogOption(
-                onPressed: hasSdCard ? () async {
-                  try {
-                    final path = await const MethodChannel('com.piliplus/download')
-                        .invokeMethod<String>('getExternalSDCardPath');
-                    if (path == null || path.isEmpty) {
-                      SmartDialog.showToast('未检测到外置 SD 卡');
-                      return;
-                    }
-                    await _handleMigration(context, setState, path, 1, '切换成功: $path');
-                  } catch (e) {
-                    SmartDialog.showToast('未检测到外置 SD 卡');
-                  }
-                } : null,
-                child: Text('2. SD卡存储 (推荐，免SAF授权)', style: TextStyle(fontSize: 14, color: hasSdCard ? null : Colors.grey)),
-              ),
-              DialogOption(
-                onPressed: () async {
-                  try {
-                    final path = await const MethodChannel('com.piliplus/download')
-                        .invokeMethod<String>('selectCustomDirectory');
-                    if (path == null || path.isEmpty) return;
-                    await _handleMigration(context, setState, path, 2, '已选择: $path');
-                  } catch (e) {
-                    SmartDialog.showToast('选择自定义目录失败');
-                  }
-                },
-                child: const Text('3. 自定义 SAF 目录', style: TextStyle(fontSize: 14)),
-              ),
-            ],
-          );
-        },
+      return SimpleDialog(
+        title: const Text('选择下载目录'),
+        clipBehavior: Clip.hardEdge,
+        contentPadding: const EdgeInsets.symmetric(vertical: 12),
+        children: [
+          DialogOption(
+            onPressed: () async {
+              await _handleMigration(context, setState, defDownloadPath, 0, '已恢复本机存储');
+            },
+            child: const Text('1. 本机存储 (默认)', style: TextStyle(fontSize: 14)),
+          ),
+          DialogOption(
+            onPressed: () async {
+              try {
+                final path = await DownloadManager.getExternalSDCardPath();
+                if (path == null || path.isEmpty) {
+                  SmartDialog.showToast('未检测到外置物理 SD 卡');
+                  return;
+                }
+                if (!context.mounted) return;
+                await _handleMigration(context, setState, path, 1, '切换成功: $path');
+              } catch (e) {
+                SmartDialog.showToast('未检测到外置 SD 卡');
+              }
+            },
+            child: const Text('2. SD卡存储 (推荐，免SAF授权)', style: TextStyle(fontSize: 14)),
+          ),
+          DialogOption(
+            onPressed: () async {
+              try {
+                final path = await const MethodChannel('com.piliplus/download')
+                    .invokeMethod<String>('selectCustomDirectory');
+                if (path == null || path.isEmpty) return;
+                if (!context.mounted) return;
+                await _handleMigration(context, setState, path, 2, '已选择: $path');
+              } catch (e) {
+                SmartDialog.showToast('选择自定义目录失败');
+              }
+            },
+            child: const Text('3. 自定义 SAF 目录', style: TextStyle(fontSize: 14)),
+          ),
+        ],
       );
     },
   );

@@ -30,16 +30,22 @@ class FileSource extends DataSource {
     required bool hasDashAudio,
     required String typeTag,
   }) {
-    final effectiveIsMp4 = isMp4 ||
-        File(path.join(dir, typeTag, PathUtils.videoNameType1)).existsSync();
+    final type1InRoot = path.join(dir, PathUtils.videoNameType1);
+    final type1InTag = path.join(dir, typeTag, PathUtils.videoNameType1);
+    final hasType1Root = File(type1InRoot).existsSync();
+    final hasType1Tag = File(type1InTag).existsSync();
+    final effectiveIsMp4 = isMp4 || hasType1Root || hasType1Tag;
+
+    final videoPath = hasType1Root
+        ? type1InRoot
+        : (hasType1Tag || effectiveIsMp4
+            ? type1InTag
+            : path.join(dir, typeTag, PathUtils.videoNameType2));
+
     return FileSource._(
       dir: dir,
       isMp4: effectiveIsMp4,
-      videoSource: path.join(
-        dir,
-        typeTag,
-        effectiveIsMp4 ? PathUtils.videoNameType1 : PathUtils.videoNameType2,
-      ),
+      videoSource: videoPath,
       audioSource: effectiveIsMp4 || !hasDashAudio
           ? null
           : path.join(dir, typeTag, PathUtils.audioNameType2),

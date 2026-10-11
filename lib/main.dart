@@ -76,9 +76,24 @@ Future<void> _initDownPath() async {
     }
   } else if (Platform.isAndroid) {
     final type =
-        GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0);
+        GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0) as int;
     final customDownPath = Pref.downloadPath;
-    if (type == 1) {
+
+    final externalStorageDirPath =
+        (await getExternalStorageDirectory())?.path;
+    if (externalStorageDirPath != null) {
+      defDownloadPath = path.join(externalStorageDirPath, PathUtils.downloadDir);
+    }
+
+    if (type == 2) {
+      // SAF Tree URI mode
+      if (customDownPath != null && customDownPath.isNotEmpty) {
+        downloadPath = customDownPath;
+      } else {
+        downloadPath = defDownloadPath;
+      }
+    } else if (type == 1) {
+      // External SD Card sandbox mode
       if (customDownPath != null &&
           customDownPath.isNotEmpty &&
           Directory(customDownPath).existsSync()) {
@@ -88,20 +103,14 @@ Future<void> _initDownPath() async {
         if (sdPath != null && sdPath.isNotEmpty) {
           downloadPath = sdPath;
           await GStorage.setting.put(SettingBoxKey.downloadPath, sdPath);
+        } else if (customDownPath != null && customDownPath.isNotEmpty) {
+          downloadPath = customDownPath;
         } else {
-          final externalStorageDirPath =
-              (await getExternalStorageDirectory())?.path;
-          downloadPath = externalStorageDirPath != null
-              ? path.join(externalStorageDirPath, PathUtils.downloadDir)
-              : defDownloadPath;
+          downloadPath = defDownloadPath;
         }
       }
     } else {
-      final externalStorageDirPath =
-          (await getExternalStorageDirectory())?.path;
-      downloadPath = externalStorageDirPath != null
-          ? path.join(externalStorageDirPath, PathUtils.downloadDir)
-          : defDownloadPath;
+      downloadPath = defDownloadPath;
     }
   } else {
     downloadPath = defDownloadPath;

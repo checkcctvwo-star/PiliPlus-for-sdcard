@@ -222,6 +222,166 @@ class BiliDownloadEntryInfo with MultiSelectData {
             : null,
       );
 
+  factory BiliDownloadEntryInfo.fromLenientJson(Map<String, dynamic> json) {
+    int parseInt(dynamic v, [int def = 0]) {
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v) ?? def;
+      return def;
+    }
+    int? parseNullableInt(dynamic v) {
+      if (v == null) return null;
+      if (v is int) return v;
+      if (v is num) return v.toInt();
+      if (v is String) return int.tryParse(v);
+      return null;
+    }
+    bool parseBool(dynamic v, [bool def = false]) {
+      if (v is bool) return v;
+      if (v is num) return v != 0;
+      if (v is String) return v.toLowerCase() == 'true' || v == '1';
+      return def;
+    }
+    String parseString(dynamic v, [String def = '']) {
+      if (v == null) return def;
+      return v.toString();
+    }
+    String? parseNullableString(dynamic v) {
+      if (v == null) return null;
+      return v.toString();
+    }
+
+    PageInfo? pageData;
+    if (json['page_data'] is Map) {
+      try {
+        final p = Map<String, dynamic>.from(json['page_data'] as Map);
+        pageData = PageInfo(
+          cid: parseInt(p['cid']),
+          page: parseInt(p['page'], 1),
+          from: parseNullableString(p['from']),
+          part: parseNullableString(p['part']),
+          vid: parseNullableString(p['vid']),
+          hasAlias: parseBool(p['has_alias']),
+          tid: parseInt(p['tid']),
+          width: parseInt(p['width']),
+          height: parseInt(p['height']),
+          rotate: parseInt(p['rotate']),
+          downloadTitle: parseNullableString(p['download_title']),
+          downloadSubtitle: parseNullableString(p['download_subtitle']),
+        );
+      } catch (_) {}
+    }
+
+    EpInfo? ep;
+    if (json['ep'] is Map) {
+      try {
+        final e = Map<String, dynamic>.from(json['ep'] as Map);
+        ep = EpInfo(
+          avId: parseInt(e['av_id']),
+          page: parseInt(e['page'], 1),
+          danmaku: parseInt(e['danmaku']),
+          cover: parseString(e['cover']),
+          episodeId: parseInt(e['episode_id']),
+          index: parseString(e['index']),
+          indexTitle: parseString(e['index_title']),
+          showTitle: parseNullableString(e['show_title']),
+          from: parseString(e['from']),
+          seasonType: parseInt(e['season_type']),
+          width: parseInt(e['width']),
+          height: parseInt(e['height']),
+          rotate: parseInt(e['rotate']),
+          link: parseString(e['link']),
+          bvid: parseString(e['bvid']),
+          sortIndex: parseInt(e['sort_index']),
+        );
+      } catch (_) {}
+    }
+
+    SeasonInfo? seasonInfo;
+    if (json['season_info'] is Map) {
+      try {
+        final s = Map<String, dynamic>.from(json['season_info'] as Map);
+        seasonInfo = SeasonInfo(
+          index: parseInt(s['index']),
+          id: parseInt(s['id']),
+          title: parseString(s['title']),
+          cover: parseString(s['cover']),
+          mid: parseInt(s['mid']),
+          uname: parseString(s['uname']),
+        );
+      } catch (_) {}
+    }
+
+    SourceInfo? source;
+    if (json['source'] is Map) {
+      try {
+        final so = Map<String, dynamic>.from(json['source'] as Map);
+        source = SourceInfo(
+          avId: parseInt(so['av_id']),
+          cid: parseInt(so['cid']),
+        );
+      } catch (_) {}
+    }
+
+    Map<String, String>? safUris;
+    if (json['saf_file_uris'] is Map) {
+      try {
+        safUris = {};
+        (json['saf_file_uris'] as Map).forEach((k, v) {
+          if (k != null && v != null) {
+            safUris![k.toString()] = v.toString();
+          }
+        });
+      } catch (_) {}
+    }
+
+    List<SegmentItemModel>? segs;
+    if (json['segments'] != null) {
+      try {
+        segs = SegmentItemModel.fromCache(json['segments']);
+      } catch (_) {}
+    }
+
+    return BiliDownloadEntryInfo(
+      mediaType: parseInt(json['media_type'], 1),
+      hasDashAudio: parseBool(json['has_dash_audio']),
+      isCompleted: parseBool(json['is_completed'], true),
+      totalBytes: parseInt(json['total_bytes']),
+      downloadedBytes: parseInt(
+        json['downloaded_bytes'],
+        parseInt(json['total_bytes']),
+      ),
+      title: parseString(json['title'], '未命名视频'),
+      typeTag: parseNullableString(json['type_tag']),
+      cover: parseString(json['cover']),
+      videoQuality: parseNullableInt(json['video_quality']),
+      preferedVideoQuality: parseInt(json['prefered_video_quality'], 80),
+      qualityPithyDescription: parseString(json['quality_pithy_description']),
+      guessedTotalBytes: parseInt(json['guessed_total_bytes']),
+      totalTimeMilli: parseInt(json['total_time_milli']),
+      danmakuCount: parseInt(json['danmaku_count']),
+      timeUpdateStamp: parseInt(json['time_update_stamp']),
+      timeCreateStamp: parseInt(json['time_create_stamp']),
+      canPlayInAdvance: parseBool(json['can_play_in_advance']),
+      interruptTransformTempFile: parseBool(
+        json['interrupt_transform_temp_file'],
+      ),
+      avid: parseInt(json['avid']),
+      spid: parseNullableInt(json['spid']),
+      bvid: parseString(json['bvid']),
+      ownerId: parseNullableInt(json['owner_id']),
+      ownerName: parseNullableString(json['owner_name']),
+      pageData: pageData,
+      seasonId: parseNullableString(json['season_id']),
+      source: source,
+      ep: ep,
+      segments: segs,
+      seasonInfo: seasonInfo,
+      safFileUris: safUris,
+    );
+  }
+
+
   Map<String, dynamic> toJson() => <String, dynamic>{
     'media_type': mediaType,
     'has_dash_audio': hasDashAudio,

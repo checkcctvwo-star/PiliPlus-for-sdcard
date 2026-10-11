@@ -17,6 +17,7 @@ import 'package:PiliPlus/models_new/video/video_detail/data.dart';
 import 'package:PiliPlus/models_new/video/video_detail/episode.dart' as ugc;
 import 'package:PiliPlus/models_new/video/video_detail/page.dart';
 import 'package:PiliPlus/services/download/download_manager.dart';
+import 'package:PiliPlus/services/download/universal_cache_recovery_engine.dart';
 import 'package:PiliPlus/utils/cache_manager.dart';
 import 'package:PiliPlus/utils/danmaku_utils.dart';
 import 'package:PiliPlus/utils/extension/file_ext.dart';
@@ -346,46 +347,34 @@ class DownloadService extends GetxService {
   }
 
   Future<void> _readDownloadList() async {
-    downloadList.clear();
-    final downloadDir = Directory(await _getDownloadPath());
-    await for (final dir in downloadDir.list()) {
-      if (dir is Directory) {
-        downloadList.addAll(await _readDownloadDirectory(dir));
-      }
-    }
-    downloadList.sort((a, b) => b.timeUpdateStamp.compareTo(a.timeUpdateStamp));
-  }
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+    final basePath = downloadPath.isNotEmpty ? downloadPath : await _getDownloadPath();
+    final recovered = await UniversalCacheRecoveryEngine.scanAndRecoverAll(
+      basePath: basePath,
+      dirType: type,
+    );
 
-  @pragma('vm:notify-debugger-on-exception')
-  Future<List<BiliDownloadEntryInfo>> _readDownloadDirectory(
-    Directory pageDir,
-  ) async {
-    final result = <BiliDownloadEntryInfo>[];
-
-    if (!pageDir.existsSync()) {
-      return result;
+    final activeCids = waitDownloadQueue.map((e) => e.cid).toSet();
+    if (curDownload.value case final cur?) {
+      activeCids.add(cur.cid);
     }
 
-    await for (final entryDir in pageDir.list()) {
-      if (entryDir is Directory) {
-        final entryFile = File(path.join(entryDir.path, _entryFile));
-        if (entryFile.existsSync()) {
-          try {
-            final entryJson = await entryFile.readAsString();
-            final entry = BiliDownloadEntryInfo.fromJson(jsonDecode(entryJson))
-              ..pageDirPath = pageDir.path
-              ..entryDirPath = entryDir.path;
-            if (entry.isCompleted) {
-              result.add(entry);
-            } else {
-              waitDownloadQueue.add(entry..status = DownloadStatus.wait);
-            }
-          } catch (_) {}
+    final completedList = <BiliDownloadEntryInfo>[];
+    for (final entry in recovered) {
+      if (!activeCids.contains(entry.cid)) {
+        if (entry.isCompleted) {
+          completedList.add(entry);
+        } else {
+          waitDownloadQueue.add(entry..status = DownloadStatus.wait);
         }
       }
     }
 
-    return result;
+    downloadList.assignAll(completedList);
+    downloadList.sort((a, b) => b.timeUpdateStamp.compareTo(a.timeUpdateStamp));
   }
 
   void downloadVideo({
@@ -543,6 +532,21 @@ class DownloadService extends GetxService {
       dirName = entry.avid.toString();
       pageDirName = 'c_${page.cid}';
     }
+
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+
+    if (type == 2 || downloadPath.startsWith('content://')) {
+      final stagingBase = path.join(appSupportDirPath, 'download_staging');
+      final pageDir = Directory(path.join(stagingBase, dirName, pageDirName));
+      if (!pageDir.existsSync()) {
+        await pageDir.create(recursive: true);
+      }
+      return pageDir;
+    }
+
     final pageDir = Directory(
       path.join(await _getDownloadPath(), dirName, pageDirName),
     );
@@ -553,6 +557,13 @@ class DownloadService extends GetxService {
   }
 
   static Future<String> _getDownloadPath() async {
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+    if (type == 2 || downloadPath.startsWith('content://')) {
+      return downloadPath;
+    }
     final dir = Directory(downloadPath);
     if (!dir.existsSync()) {
       await dir.create(recursive: true);
@@ -857,6 +868,16 @@ class DownloadService extends GetxService {
       return;
     }
 
+    late final String dirName;
+    late final String pageDirName;
+    if (entry.ep case final ep?) {
+      dirName = 's_${entry.seasonId}';
+      pageDirName = ep.episodeId.toString();
+    } else if (entry.pageData case final page?) {
+      dirName = entry.avid.toString();
+      pageDirName = 'c_${page.cid}';
+    }
+
     // 混流管道接入：当视频与音频下载完成时，调用 DownloadManager.mergeDashMedia 将 video.m4s 与 audio.m4s 混流为标准 0.mp4
     final typeTag = entry.typeTag;
     if (typeTag != null) {
@@ -887,6 +908,12 @@ class DownloadService extends GetxService {
             debugPrint('mergeDashMedia error: $e');
           }
         }
+      } else if (File(outputPath).existsSync()) {
+        final length = await File(outputPath).length();
+        entry
+          ..mediaType = 1
+          ..totalBytes = length
+          ..downloadedBytes = length;
       }
     }
 
@@ -894,7 +921,30 @@ class DownloadService extends GetxService {
       ..downloadedBytes = entry.totalBytes
       ..isCompleted = true;
     await _updateBiliDownloadEntryJson(entry);
+
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+
+    // 如果目标是 SAF 树形目录模式，将暂存目录原子提交到 SAF DocumentFile 树
+    if (type == 2 || downloadPath.startsWith('content://')) {
+      final stagingEntryPath = entry.entryDirPath;
+      final commitOk = await DownloadManager.commitStagingEntry(
+        stagingEntryPath: stagingEntryPath,
+        targetType: 2,
+        targetBaseDir: downloadPath,
+        relativePath: '$dirName/$pageDirName',
+      );
+      if (commitOk) {
+        entry
+          ..pageDirPath = downloadPath
+          ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
+      }
+    }
+
     waitDownloadQueue.remove(entry);
+    downloadList.removeWhere((e) => e.avid == entry.avid && e.cid == entry.cid);
     downloadList.insert(0, entry);
     flagNotifier.refresh();
     _curCid = null;
