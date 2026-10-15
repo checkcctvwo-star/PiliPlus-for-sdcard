@@ -1,6 +1,10 @@
 import 'dart:async';
+import 'dart:io' show File;
 import 'dart:math' show min;
 import 'dart:ui';
+
+import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:path/path.dart' as path;
 
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/pair.dart';
@@ -363,6 +367,42 @@ class VideoDetailController extends GetxController
     }
     data = PlayUrlModel(timeLength: entry.totalTimeMilli);
     _setVideoHeight();
+  }
+
+  bool checkAndApplyLocalSource() {
+    if (isFileSource) return true;
+    try {
+      if (!Get.isRegistered<DownloadService>()) return false;
+      final downloadService = Get.find<DownloadService>();
+      final localEntry = downloadService.downloadList.firstWhereOrNull(
+        (e) => e.cid == cid.value && e.isCompleted,
+      );
+      if (localEntry != null) {
+        final dirPath = localEntry.entryDirPath;
+        final typeTag = localEntry.typeTag ?? '';
+        final mp4InRoot = path.join(dirPath, PathUtils.videoNameType1);
+        final mp4InTag = path.join(dirPath, typeTag, PathUtils.videoNameType1);
+        final videoM4s = path.join(dirPath, typeTag, PathUtils.videoNameType2);
+
+        if (File(mp4InRoot).existsSync() ||
+            File(mp4InTag).existsSync() ||
+            File(videoM4s).existsSync() ||
+            (dirPath.startsWith('content://') && localEntry.safFileUris != null)) {
+          initFileSource(localEntry);
+          isFileSource = true;
+          args['sourceType'] = SourceType.file;
+          args['entry'] = localEntry;
+          args['dirPath'] = dirPath;
+          SmartDialog.showToast('已检测到本地离线缓存，优先播放本地文件');
+          return true;
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('checkAndApplyLocalSource error: $e');
+      }
+    }
+    return false;
   }
 
   @override
@@ -842,7 +882,7 @@ class VideoDetailController extends GetxController
     bool fromReset = false,
     bool autoFullScreenFlag = false,
   }) async {
-    if (isFileSource) {
+    if (isFileSource || checkAndApplyLocalSource()) {
       return initPlayerIfNeeded(autoFullScreenFlag);
     }
     if (isQuerying) {
@@ -1004,6 +1044,9 @@ class VideoDetailController extends GetxController
       }
       await initPlayerIfNeeded(autoFullScreenFlag);
     } else {
+      if (checkAndApplyLocalSource()) {
+        return initPlayerIfNeeded(autoFullScreenFlag);
+      }
       _autoPlay.value = false;
       videoState.value = false;
       if (plPlayerController.isFullScreen.value) {
@@ -1280,6 +1323,9 @@ class VideoDetailController extends GetxController
   }
 
   void onReset({bool isStein = false}) {
+    if (sourceType != SourceType.file) {
+      isFileSource = false;
+    }
     if (isFileSource) {
       cacheLocalProgress();
     }
