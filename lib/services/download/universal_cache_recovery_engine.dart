@@ -282,8 +282,8 @@ class UniversalCacheRecoveryEngine {
       }
     }
 
-    final result = uniqueMap.values.toList();
-    result.sort((a, b) => b.timeUpdateStamp.compareTo(a.timeUpdateStamp));
+    final result = uniqueMap.values.toList()
+      ..sort((a, b) => b.timeUpdateStamp.compareTo(a.timeUpdateStamp));
     return result;
   }
 
