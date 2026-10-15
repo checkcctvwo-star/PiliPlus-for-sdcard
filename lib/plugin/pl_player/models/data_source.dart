@@ -32,21 +32,48 @@ class FileSource extends DataSource {
   }) {
     final type1InRoot = path.join(dir, PathUtils.videoNameType1);
     final type1InTag = path.join(dir, typeTag, PathUtils.videoNameType1);
+    final videoM4s = path.join(dir, typeTag, PathUtils.videoNameType2);
+    final audioM4s = path.join(dir, typeTag, PathUtils.audioNameType2);
+
     final hasType1Root = File(type1InRoot).existsSync();
     final hasType1Tag = File(type1InTag).existsSync();
-    final effectiveIsMp4 = isMp4 || hasType1Root || hasType1Tag;
+    final hasVideoM4s = File(videoM4s).existsSync();
+    final hasAudioM4s = File(audioM4s).existsSync();
 
-    final videoPath = hasType1Root
-        ? type1InRoot
-        : (hasType1Tag || effectiveIsMp4
-            ? type1InTag
-            : path.join(dir, typeTag, PathUtils.videoNameType2));
+    // 严谨决策：只有当 0.mp4 真实物理存在时，才作为单体 MP4 播放
+    if (hasType1Root) {
+      return FileSource._(
+        dir: dir,
+        isMp4: true,
+        videoSource: type1InRoot,
+        audioSource: null,
+      );
+    } else if (hasType1Tag) {
+      return FileSource._(
+        dir: dir,
+        isMp4: true,
+        videoSource: type1InTag,
+        audioSource: null,
+      );
+    } else if (hasVideoM4s) {
+      // 遗留未混流切片：回退为标准双轨 DASH 播放，坚决防止黑屏无声
+      return FileSource._(
+        dir: dir,
+        isMp4: false,
+        videoSource: videoM4s,
+        audioSource: hasAudioM4s ? audioM4s : (hasDashAudio ? audioM4s : null),
+      );
+    }
 
+    // 兜底逻辑（例如 SAF content:// 协议或特殊挂载）
+    final fallbackIsMp4 = isMp4;
     return FileSource._(
       dir: dir,
-      isMp4: effectiveIsMp4,
-      videoSource: videoPath,
-      audioSource: effectiveIsMp4 || !hasDashAudio
+      isMp4: fallbackIsMp4,
+      videoSource: fallbackIsMp4
+          ? type1InTag
+          : path.join(dir, typeTag, PathUtils.videoNameType2),
+      audioSource: fallbackIsMp4 || !hasDashAudio
           ? null
           : path.join(dir, typeTag, PathUtils.audioNameType2),
     );

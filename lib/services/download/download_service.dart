@@ -902,8 +902,16 @@ class DownloadService extends GetxService {
               ..downloadedBytes = length;
             await File(videoPath).tryDel();
             await File(audioPath).tryDel();
+          } else {
+            // 混流失败时，确保保持 mediaType=2 并启用 hasDashAudio，绝不破坏双轨播放机制
+            entry
+              ..mediaType = 2
+              ..hasDashAudio = true;
           }
         } catch (e) {
+          entry
+            ..mediaType = 2
+            ..hasDashAudio = true;
           if (kDebugMode) {
             debugPrint('mergeDashMedia error: $e');
           }
@@ -914,6 +922,10 @@ class DownloadService extends GetxService {
           ..mediaType = 1
           ..totalBytes = length
           ..downloadedBytes = length;
+      } else {
+        entry
+          ..mediaType = 2
+          ..hasDashAudio = File(audioPath).existsSync();
       }
     }
 
@@ -937,9 +949,17 @@ class DownloadService extends GetxService {
         relativePath: '$dirName/$pageDirName',
       );
       if (commitOk) {
-        entry
-          ..pageDirPath = downloadPath
-          ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
+        final resolvedTargetBase = await DownloadManager.resolveContentUri(downloadPath);
+        if (resolvedTargetBase != null && resolvedTargetBase.isNotEmpty) {
+          entry
+            ..pageDirPath = path.join(resolvedTargetBase, dirName)
+            ..entryDirPath = path.join(resolvedTargetBase, dirName, pageDirName);
+        } else {
+          entry
+            ..pageDirPath = downloadPath
+            ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
+        }
+        await _updateBiliDownloadEntryJson(entry);
       }
     }
 

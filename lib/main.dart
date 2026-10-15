@@ -110,7 +110,13 @@ Future<void> _initDownPath() async {
         }
       }
     } else {
-      downloadPath = defaultAndroidPath;
+      if (customDownPath != null &&
+          customDownPath.isNotEmpty &&
+          Directory(customDownPath).existsSync()) {
+        downloadPath = customDownPath;
+      } else {
+        downloadPath = defaultAndroidPath;
+      }
     }
   } else {
     downloadPath = defDownloadPath;

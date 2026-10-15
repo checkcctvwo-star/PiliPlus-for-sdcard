@@ -20,6 +20,7 @@ import 'package:PiliPlus/pages/danmaku/danmaku_model.dart';
 import 'package:PiliPlus/pages/sponsor_block/block_mixin.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_status.dart';
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/plugin/pl_player/models/double_tap_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/duration.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
@@ -907,9 +908,26 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     };
 
     String video = dataSource.videoSource;
-    if (dataSource.audioSource case final audio? when (audio.isNotEmpty)) {
+    String? audio = dataSource.audioSource;
+
+    if (dataSource is FileSource && Platform.isAndroid) {
+      if (video.startsWith('content://')) {
+        final fd = await DownloadManager.openSafFd(video);
+        if (fd != null && fd >= 0) {
+          video = 'fdclose://$fd';
+        }
+      }
+      if (audio != null && audio.startsWith('content://')) {
+        final fd = await DownloadManager.openSafFd(audio);
+        if (fd != null && fd >= 0) {
+          audio = 'fdclose://$fd';
+        }
+      }
+    }
+
+    if (audio case final audioStr? when (audioStr.isNotEmpty)) {
       if (onlyPlayAudio.value) {
-        video = audio;
+        video = audioStr;
       } else {
         // dely_open need provide length
         video =
@@ -919,7 +937,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             '%${isFileSource ? utf8.encode(video).length : video.length}%$video;'
             '!new_stream;!no_chapters;'
             // '!delay_open,media_type=audio;'
-            '%${isFileSource ? utf8.encode(audio).length : audio.length}%$audio');
+            '%${isFileSource ? utf8.encode(audioStr).length : audioStr.length}%$audioStr');
       }
       audioFilterExtras(volume, map: extras);
     }

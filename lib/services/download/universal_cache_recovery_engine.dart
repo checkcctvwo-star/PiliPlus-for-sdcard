@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/services/download/download_manager.dart';
-import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 
@@ -43,6 +42,13 @@ class UniversalCacheRecoveryEngine {
                 ..entryDirPath = entryDirUri
                 ..isCompleted = true
                 ..status = DownloadStatus.completed;
+
+              final resolvedPhysical = await DownloadManager.resolveContentUri(entryDirUri);
+              if (resolvedPhysical != null && resolvedPhysical.isNotEmpty) {
+                entry
+                  ..entryDirPath = resolvedPhysical
+                  ..pageDirPath = p.dirname(resolvedPhysical);
+              }
 
               entry.safFileUris ??= {};
               if (entryFileUri != null) {
@@ -144,22 +150,38 @@ class UniversalCacheRecoveryEngine {
                   if (tag != null) {
                     final videoM4s = File(p.join(entryDir.path, tag, _videoM4sFileName));
                     final audioM4s = File(p.join(entryDir.path, tag, _audioM4sFileName));
-                    if (videoM4s.existsSync() && audioM4s.existsSync()) {
-                      final targetMp4 = p.join(entryDir.path, tag, _mp4FileName);
-                      final muxSuccess = await DownloadManager.mergeDashMedia(
-                        videoPath: videoM4s.path,
-                        audioPath: audioM4s.path,
-                        outputPath: targetMp4,
-                      );
-                      if (muxSuccess && File(targetMp4).existsSync()) {
-                        final len = File(targetMp4).lengthSync();
+                    if (videoM4s.existsSync()) {
+                      bool muxSuccess = false;
+                      if (audioM4s.existsSync()) {
+                        final targetMp4 = p.join(entryDir.path, tag, _mp4FileName);
+                        muxSuccess = await DownloadManager.mergeDashMedia(
+                          videoPath: videoM4s.path,
+                          audioPath: audioM4s.path,
+                          outputPath: targetMp4,
+                        );
+                        if (muxSuccess && File(targetMp4).existsSync()) {
+                          final len = File(targetMp4).lengthSync();
+                          entry
+                            ..isCompleted = true
+                            ..mediaType = 1
+                            ..totalBytes = len
+                            ..downloadedBytes = len
+                            ..status = DownloadStatus.completed;
+                          // 更新持久化 entry.json
+                          await _saveEntryJson(entryFile, entry);
+                        }
+                      }
+                      if (!muxSuccess) {
+                        // 混流未执行或失败：安全标记为 DASH 切片任务，确保可以通过双轨播放，绝不黑屏
+                        final totalM4sBytes = videoM4s.lengthSync() +
+                            (audioM4s.existsSync() ? audioM4s.lengthSync() : 0);
                         entry
                           ..isCompleted = true
-                          ..mediaType = 1
-                          ..totalBytes = len
-                          ..downloadedBytes = len
+                          ..mediaType = 2
+                          ..hasDashAudio = audioM4s.existsSync()
+                          ..totalBytes = totalM4sBytes
+                          ..downloadedBytes = totalM4sBytes
                           ..status = DownloadStatus.completed;
-                        // 更新持久化 entry.json
                         await _saveEntryJson(entryFile, entry);
                       }
                     }
@@ -173,6 +195,8 @@ class UniversalCacheRecoveryEngine {
             } else {
               // 无 entry.json 但存在媒体文件：离线逆向合成
               File? foundMp4;
+              File? foundVideoM4s;
+              File? foundAudioM4s;
               final directMp4 = File(p.join(entryDir.path, _mp4FileName));
               if (directMp4.existsSync()) {
                 foundMp4 = directMp4;
@@ -184,20 +208,29 @@ class UniversalCacheRecoveryEngine {
                       foundMp4 = subMp4;
                       break;
                     }
+                    final vM4s = File(p.join(sub.path, _videoM4sFileName));
+                    if (vM4s.existsSync()) {
+                      foundVideoM4s = vM4s;
+                      final aM4s = File(p.join(sub.path, _audioM4sFileName));
+                      if (aM4s.existsSync()) foundAudioM4s = aM4s;
+                      break;
+                    }
                   }
                 }
               }
 
-              if (foundMp4 != null) {
+              if (foundMp4 != null || foundVideoM4s != null) {
                 final pageName = p.basename(pageDir.path);
                 final entryName = p.basename(entryDir.path);
                 final avid = int.tryParse(pageName.replaceAll(RegExp(r'\D'), '')) ?? 0;
                 final cid = int.tryParse(entryName.replaceAll(RegExp(r'\D'), '')) ?? 0;
-                final fileLen = foundMp4.lengthSync();
+                final fileLen = foundMp4?.lengthSync() ??
+                    (foundVideoM4s!.lengthSync() + (foundAudioM4s?.lengthSync() ?? 0));
+                final isSingleMp4 = foundMp4 != null;
 
                 final synthetic = BiliDownloadEntryInfo(
-                  mediaType: 1,
-                  hasDashAudio: false,
+                  mediaType: isSingleMp4 ? 1 : 2,
+                  hasDashAudio: !isSingleMp4 && foundAudioM4s != null,
                   isCompleted: true,
                   totalBytes: fileLen,
                   downloadedBytes: fileLen,

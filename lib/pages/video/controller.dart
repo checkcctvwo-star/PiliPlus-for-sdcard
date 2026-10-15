@@ -27,6 +27,7 @@ import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/video/play/url.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/models_new/media_list/media_list.dart';
 import 'package:PiliPlus/models_new/pgc/pgc_info_model/result.dart';
 import 'package:PiliPlus/models_new/video/video_detail/data.dart';
@@ -731,6 +732,17 @@ class VideoDetailController extends GetxController
     Duration? seek = defaultST ?? playedTime;
     if (seek == .zero) seek = null;
     seek ??= getFirstSegment();
+
+    if (isFileSource && args['dirPath'] is String) {
+      final String dir = args['dirPath'];
+      if (dir.startsWith('content://')) {
+        final resolved = await DownloadManager.resolveContentUri(dir);
+        if (resolved != null && resolved.isNotEmpty) {
+          args['dirPath'] = resolved;
+        }
+      }
+    }
+
     await plPlayerController.setDataSource(
       isFileSource
           ? FileSource(

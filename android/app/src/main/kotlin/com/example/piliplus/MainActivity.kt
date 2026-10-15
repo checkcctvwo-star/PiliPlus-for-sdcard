@@ -113,7 +113,11 @@ class MainActivity : AudioServiceActivity() {
                                         fileName = file.name
                                     )
                                     if (commitRes.isFailure) {
-                                        throw commitRes.exceptionOrNull() ?: Exception("Failed to commit ${file.name} to SAF")
+                                        if (file.name == "0.mp4" || file.name.endsWith(".m4s")) {
+                                            throw commitRes.exceptionOrNull() ?: Exception("Failed to commit media ${file.name} to SAF")
+                                        } else {
+                                            Log.w(TAG, "Non-critical file commit warning for ${file.name}", commitRes.exceptionOrNull())
+                                        }
                                     }
                                 }
                                 stagingDir.deleteRecursively()
@@ -130,6 +134,27 @@ class MainActivity : AudioServiceActivity() {
                             Log.e(TAG, "commitStagingEntry failed", e)
                             withContext(Dispatchers.Main) { result.error("COMMIT_FAILED", e.message, e.toString()) }
                         }
+                    }
+                }
+
+                // ── SAF URI Resolution and Direct FD Bridging ────────────────────
+                "resolveContentUriToPath" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString != null) {
+                        val path = SafStorageBridge.resolveSafUriToPath(this@MainActivity, uriString)
+                        result.success(path)
+                    } else {
+                        result.error("INVALID_ARGS", "uri is null", null)
+                    }
+                }
+
+                "openSafFd" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString != null) {
+                        val fd = SafStorageBridge.openSafFd(this@MainActivity, uriString)
+                        result.success(fd)
+                    } else {
+                        result.error("INVALID_ARGS", "uri is null", null)
                     }
                 }
 

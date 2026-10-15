@@ -167,6 +167,17 @@ class DownloadManager {
     }
   }
 
+  static Future<int?> openSafFd(String contentUri) async {
+    try {
+      return await _channel.invokeMethod<int>(
+        'openSafFd',
+        {'uri': contentUri},
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> clearSafPfds() async {
     try {
       await _channel.invokeMethod<void>('clearSafPfds');

@@ -15,8 +15,9 @@ object SafStorageBridge {
     private const val TAG = "SafStorageBridge"
 
     /**
-     * Atomically commits a local staging file to the target SAF DocumentFile directory.
+     * Commits a local staging file to the target SAF DocumentFile directory reliably.
      * E.g. commits staging "0.mp4" into treeUri / "12345/c_6789" / "0.mp4"
+     * Directly overwrites target file to avoid external SD card FAT32/exFAT renameTo failures.
      */
     suspend fun commitFileToSaf(
         context: Context,
@@ -48,14 +49,19 @@ object SafStorageBridge {
 
         val ext = fileName.substringAfterLast('.', "")
         val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
-        val tmpName = ".$fileName.tmp"
 
-        val tmpDoc = targetDir.findFile(tmpName) ?: targetDir.createFile(mimeType, tmpName)
-            ?: return@withContext Result.failure(IOException("Failed to create SAF placeholder for $tmpName"))
+        // If target file already exists, remove it first to ensure clean state
+        targetDir.findFile(fileName)?.delete()
+
+        // Create target document directly
+        val targetDoc = targetDir.createFile(mimeType, fileName)
+            ?: targetDir.findFile(fileName)
+            ?: return@withContext Result.failure(IOException("Failed to create SAF document for $fileName"))
 
         try {
-            val outStream = context.contentResolver.openOutputStream(tmpDoc.uri)
-                ?: return@withContext Result.failure(IOException("Failed to open SAF output stream"))
+            val outStream = context.contentResolver.openOutputStream(targetDoc.uri, "wt")
+                ?: context.contentResolver.openOutputStream(targetDoc.uri)
+                ?: return@withContext Result.failure(IOException("Failed to open SAF output stream for ${targetDoc.uri}"))
 
             outStream.use { os ->
                 FileInputStream(srcFile).use { input ->
@@ -64,20 +70,70 @@ object SafStorageBridge {
                 }
             }
 
-            // Remove previous file if exists and atomically rename
-            targetDir.findFile(fileName)?.delete()
-            if (!tmpDoc.renameTo(fileName)) {
-                return@withContext Result.failure(IOException("Failed to rename SAF tmp file to $fileName"))
+            // Verify written size
+            if (targetDoc.length() == 0L && srcFile.length() > 0L) {
+                targetDoc.delete()
+                return@withContext Result.failure(IOException("SAF file write resulted in 0 bytes for $fileName"))
             }
 
             // Cleanup local staging file
             srcFile.delete()
-            Log.i(TAG, "Successfully committed $fileName to SAF: ${tmpDoc.uri}")
-            Result.success(tmpDoc.uri.toString())
+            Log.i(TAG, "Successfully committed $fileName to SAF: ${targetDoc.uri} (size: ${targetDoc.length()})")
+            Result.success(targetDoc.uri.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Error committing $fileName to SAF", e)
-            try { tmpDoc.delete() } catch (_: Exception) {}
+            try { targetDoc.delete() } catch (_: Exception) {}
             Result.failure(e)
+        }
+    }
+
+    /**
+     * Resolves SAF Tree / Document URI to a readable physical POSIX path if accessible.
+     */
+    fun resolveSafUriToPath(context: Context, uriString: String): String? {
+        try {
+            val uri = Uri.parse(uriString)
+            val docId = when {
+                android.provider.DocumentsContract.isDocumentUri(context, uri) ->
+                    android.provider.DocumentsContract.getDocumentId(uri)
+                android.provider.DocumentsContract.isTreeUri(uri) ->
+                    android.provider.DocumentsContract.getTreeDocumentId(uri)
+                else -> uri.lastPathSegment
+            } ?: return null
+
+            val parts = docId.split(":", limit = 2)
+            if (parts.size < 2) return null
+            val volume = parts[0]
+            val relPath = parts[1]
+
+            val candidatePath = if (volume.equals("primary", ignoreCase = true)) {
+                "/storage/emulated/0/$relPath"
+            } else {
+                "/storage/$volume/$relPath"
+            }
+
+            val file = File(candidatePath)
+            if (file.exists() && file.canRead()) {
+                return file.absolutePath
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to resolve SAF URI to path: $uriString", e)
+        }
+        return null
+    }
+
+    /**
+     * Opens an input file descriptor from SAF URI and detaches it.
+     * Can be used as fdclose://$fd for libmpv.
+     */
+    fun openSafFd(context: Context, uriString: String): Int? {
+        return try {
+            val uri = Uri.parse(uriString)
+            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            pfd?.detachFd()
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to open SAF FD for $uriString", e)
+            null
         }
     }
 
