@@ -75,9 +75,22 @@ Future<void> _initDownPath() async {
       downloadPath = defDownloadPath;
     }
   } else if (Platform.isAndroid) {
-    final type =
+    var type =
         GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0) as int;
-    final customDownPath = Pref.downloadPath;
+    var customDownPath = Pref.downloadPath;
+
+    if (customDownPath == null || customDownPath.isEmpty) {
+      try {
+        final nativeSafUri = await const MethodChannel('com.piliplus/download')
+            .invokeMethod<String>('getCustomDirectoryUri');
+        if (nativeSafUri != null && nativeSafUri.isNotEmpty) {
+          customDownPath = nativeSafUri;
+          type = 2;
+          await GStorage.setting.put(SettingBoxKey.downloadDirType, 2);
+          await GStorage.setting.put(SettingBoxKey.downloadPath, nativeSafUri);
+        }
+      } catch (_) {}
+    }
 
     final externalStorageDirPath =
         (await getExternalStorageDirectory())?.path;

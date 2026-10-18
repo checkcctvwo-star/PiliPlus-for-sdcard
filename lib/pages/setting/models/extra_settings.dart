@@ -1,6 +1,5 @@
-import 'dart:io' show Platform, Directory, File;
+import 'dart:io' show Platform, Directory;
 import 'dart:math' show max;
-import 'package:path_provider/path_provider.dart';
 
 import 'package:PiliPlus/common/widgets/custom_icon.dart';
 import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
@@ -49,7 +48,7 @@ import 'package:PiliPlus/utils/utils.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/foundation.dart' show kDebugMode;
 import 'package:flutter/services.dart'
-    show FilteringTextInputFormatter, MethodChannel, EventChannel;
+    show FilteringTextInputFormatter, MethodChannel;
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:font_awesome_flutter/font_awesome_flutter.dart';
 import 'package:get/get.dart';
@@ -1245,156 +1244,6 @@ void _showCacheDialog(BuildContext context, VoidCallback setState) {
   );
 }
 
-Future<int> _calculateDirSize(Directory dir) async {
-  if (!await dir.exists()) return 0;
-  int size = 0;
-  try {
-    await for (final entity in dir.list(recursive: true, followLinks: false)) {
-      if (entity is File) {
-        size += await entity.length();
-      }
-    }
-  } catch (_) {}
-  return size;
-}
-
-Future<void> _handleMigration(BuildContext context, VoidCallback setState, String newPath, int dirType, String toastMsg) async {
-  Get.back(); // close the SimpleDialog
-  
-  if (downloadPath == newPath) return;
-
-  SmartDialog.showLoading(msg: '计算缓存大小中...');
-  int sizeBytes = await DownloadManager.calculateDirSize(downloadPath);
-  SmartDialog.dismiss();
-
-  if (sizeBytes > 500 * 1024 * 1024) {
-    double gb = sizeBytes / (1024 * 1024 * 1024);
-    bool? confirm = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('提示'),
-        content: Text('Moving ${gb.toStringAsFixed(2)} GB, this might take time...'),
-        actions: [
-          TextButton(
-            onPressed: () => Get.back(result: false),
-            child: const Text('取消'),
-          ),
-          TextButton(
-            onPressed: () => Get.back(result: true),
-            child: const Text('继续'),
-          ),
-        ],
-      ),
-    );
-    if (confirm != true) return;
-  }
-
-  bool cancelled = false;
-  
-  // Start migration async
-  final migrationFuture = const MethodChannel('com.piliplus/download').invokeMethod('startMigration', {
-    'oldPath': downloadPath,
-    'newPath': newPath,
-    'newUri': newPath,
-    'oldType': GStorage.setting.get(SettingBoxKey.downloadDirType, defaultValue: 0),
-    'newType': dirType,
-  });
-
-  // show progress dialog
-  await showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (context) {
-      migrationFuture.then((_) {
-        if (context.mounted && !cancelled) {
-          Get.back();
-        }
-      }).catchError((_) {
-        if (context.mounted && !cancelled) {
-          Get.back();
-        }
-      });
-      
-      return PopScope(
-        canPop: false,
-        child: AlertDialog(
-          title: const Text('迁移中...'),
-          content: StreamBuilder(
-            stream: const EventChannel('saf_migration_progress').receiveBroadcastStream(),
-            builder: (context, AsyncSnapshot snapshot) {
-              int transferred = 0;
-              int total = sizeBytes;
-              
-              if (snapshot.hasData) {
-                final data = snapshot.data;
-                if (data is Map) {
-                  transferred = (data['transferred'] as num?)?.toInt() ?? 0;
-                  int? eventTotal = (data['total'] as num?)?.toInt();
-                  if (eventTotal != null && eventTotal > 0) {
-                    total = eventTotal;
-                  }
-                }
-              }
-              
-              double progress = total > 0 ? transferred / total : 0.0;
-              if (progress > 1.0) progress = 1.0;
-              if (progress < 0.0) progress = 0.0;
-              
-              String transferredMB = (transferred / (1024 * 1024)).toStringAsFixed(1);
-              String totalMB = (total / (1024 * 1024)).toStringAsFixed(1);
-              
-              return Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  LinearProgressIndicator(value: snapshot.hasData ? progress : null),
-                  const SizedBox(height: 16),
-                  Text(snapshot.hasData ? '$transferredMB MB / $totalMB MB' : '准备中...'),
-                ],
-              );
-            },
-          ),
-          actions: [
-            TextButton(
-              onPressed: () {
-                cancelled = true;
-                const MethodChannel('com.piliplus/download').invokeMethod('cancelMigration');
-                Get.back();
-              },
-              child: const Text('取消'),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-
-  if (cancelled) {
-    SmartDialog.showToast('已取消迁移');
-    return;
-  }
-
-  // Update logic after migration
-  if (dirType == 0) {
-    downloadPath = defDownloadPath;
-    GStorage.setting.put(SettingBoxKey.downloadDirType, 0);
-    GStorage.setting.delete(SettingBoxKey.downloadPath);
-  } else {
-    downloadPath = newPath;
-    GStorage.setting.put(SettingBoxKey.downloadDirType, dirType);
-    GStorage.setting.put(SettingBoxKey.downloadPath, newPath);
-  }
-  
-  if (dirType != 2) {
-    try {
-      await const MethodChannel('com.piliplus/download').invokeMethod<void>('clearCustomDirectory');
-    } catch (_) {}
-  }
-  
-  setState();
-  Get.find<DownloadService>().initDownloadList();
-  SmartDialog.showToast(toastMsg);
-}
-
 void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
   showDialog(
     context: context,
@@ -1406,7 +1255,16 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
         children: [
           DialogOption(
             onPressed: () async {
-              await _handleMigration(context, setState, defDownloadPath, 0, '已恢复本机存储');
+              Get.back();
+              downloadPath = defDownloadPath;
+              await GStorage.setting.put(SettingBoxKey.downloadDirType, 0);
+              await GStorage.setting.delete(SettingBoxKey.downloadPath);
+              try {
+                await const MethodChannel('com.piliplus/download').invokeMethod<void>('clearCustomDirectory');
+              } catch (_) {}
+              setState();
+              Get.find<DownloadService>().initDownloadList();
+              SmartDialog.showToast('已恢复本机存储');
             },
             child: const Text('1. 本机存储 (默认)', style: TextStyle(fontSize: 14)),
           ),
@@ -1418,8 +1276,13 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
                   SmartDialog.showToast('未检测到外置物理 SD 卡');
                   return;
                 }
-                if (!context.mounted) return;
-                await _handleMigration(context, setState, path, 1, '切换成功: $path');
+                Get.back();
+                downloadPath = path;
+                await GStorage.setting.put(SettingBoxKey.downloadDirType, 1);
+                await GStorage.setting.put(SettingBoxKey.downloadPath, path);
+                setState();
+                Get.find<DownloadService>().initDownloadList();
+                SmartDialog.showToast('切换成功: $path');
               } catch (e) {
                 SmartDialog.showToast('未检测到外置 SD 卡');
               }
@@ -1432,8 +1295,13 @@ void _showAndroidDownPathDialog(BuildContext context, VoidCallback setState) {
                 final path = await const MethodChannel('com.piliplus/download')
                     .invokeMethod<String>('selectCustomDirectory');
                 if (path == null || path.isEmpty) return;
-                if (!context.mounted) return;
-                await _handleMigration(context, setState, path, 2, '已选择: $path');
+                Get.back();
+                downloadPath = path;
+                await GStorage.setting.put(SettingBoxKey.downloadDirType, 2);
+                await GStorage.setting.put(SettingBoxKey.downloadPath, path);
+                setState();
+                Get.find<DownloadService>().initDownloadList();
+                SmartDialog.showToast('已选择: $path');
               } catch (e) {
                 SmartDialog.showToast('选择自定义目录失败');
               }
