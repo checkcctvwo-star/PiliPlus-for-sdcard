@@ -167,6 +167,18 @@ class MainActivity : AudioServiceActivity() {
                     }
                 }
 
+                "readSafBytes" -> {
+                    val uriString = call.argument<String>("uri")
+                    if (uriString != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val bytes = SafStorageBridge.readSafBytes(this@MainActivity, uriString)
+                            withContext(Dispatchers.Main) { result.success(bytes) }
+                        }
+                    } else {
+                        result.error("INVALID_ARGS", "uri is null", null)
+                    }
+                }
+
                 // ── SAF Tree Recursive Scanning ──────────────────────────────────
                 "scanSafEntries" -> {
                     val uriString = call.argument<String>("uri")

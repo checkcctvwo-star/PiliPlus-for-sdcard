@@ -142,6 +142,27 @@ object SafStorageBridge {
         }
     }
 
+    /**
+     * Reads entire bytes of a SAF Document URI into memory.
+     * Useful for reading small metadata files such as danmaku.pb.
+     */
+    fun readSafBytes(context: Context, uriString: String): ByteArray? {
+        return try {
+            val uri = Uri.parse(uriString)
+            val inputStream = try {
+                context.contentResolver.openInputStream(uri)
+            } catch (e: Exception) {
+                findDocumentUriFallback(context, uriString)?.let { fallbackUri ->
+                    context.contentResolver.openInputStream(fallbackUri)
+                }
+            }
+            inputStream?.use { it.readBytes() }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to read SAF bytes for $uriString", e)
+            null
+        }
+    }
+
     private fun findDocumentUriFallback(context: Context, rawUri: String): Uri? {
         return try {
             val parsed = Uri.parse(rawUri)

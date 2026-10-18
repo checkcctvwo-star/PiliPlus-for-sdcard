@@ -26,7 +26,7 @@ object MediaMuxerBridge {
         outputPath: String,
         forceAudioTranscode: Boolean = false
     ): Result<String> = withContext(Dispatchers.IO) {
-        val tempOutputPath = "$outputPath.muxing.tmp"
+        val tempOutputPath = "${outputPath.removeSuffix(".mp4")}.tmp.mp4"
         val tempFile = File(tempOutputPath)
         val videoFile = File(videoPath)
         val audioFile = File(audioPath)
@@ -61,6 +61,7 @@ object MediaMuxerBridge {
                         "-avoid_negative_ts", "make_zero",
                         "-max_interleave_delta", "0",
                         "-shortest", "-strict", "unofficial", "-movflags", "+faststart",
+                        "-f", "mp4",
                         tempOutputPath
                     )
                     val sessionCopy = FFmpegKit.executeWithArguments(cmdCopy.toTypedArray())
@@ -84,6 +85,7 @@ object MediaMuxerBridge {
                         "-avoid_negative_ts", "make_zero",
                         "-max_interleave_delta", "0",
                         "-shortest", "-strict", "unofficial", "-movflags", "+faststart",
+                        "-f", "mp4",
                         tempOutputPath
                     )
                     val sessionTranscode = FFmpegKit.executeWithArguments(cmdTranscode.toTypedArray())
@@ -102,6 +104,7 @@ object MediaMuxerBridge {
                             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                             "-avoid_negative_ts", "make_zero",
                             "-shortest", "-strict", "unofficial", "-movflags", "+faststart",
+                            "-f", "mp4",
                             tempOutputPath
                         )
                         val sessionRelaxed = FFmpegKit.executeWithArguments(cmdRelaxed.toTypedArray())

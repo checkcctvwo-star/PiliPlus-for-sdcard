@@ -832,6 +832,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       'volume':
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
               .toString(),
+      'demuxer-lavf-o':
+          'protocol_whitelist="file,http,https,tcp,tls,crypto,data,concat,subfile,fd,content,pipe,edl"',
     };
     final autosync = Pref.autosync;
     if (autosync != '0') {
@@ -934,6 +936,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (audio case final audioStr? when (audioStr.isNotEmpty)) {
       if (onlyPlayAudio.value) {
         video = audioStr;
+      } else if (isFileSource &&
+          (video.startsWith('fd://') || video.startsWith('fdclose://'))) {
+        // 本地 SAF 双轨切片：mpv 的 EDL 协议禁止使用非 file 协议 (is_safe=0)
+        // 故通过 mpv 的 audio-file 属性无缝挂载音频轨，完全避开 EDL 安全沙箱限制
+        extras['audio-file'] = audioStr;
       } else {
         // dely_open need provide length
         video =

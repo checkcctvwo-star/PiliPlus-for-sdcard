@@ -1,15 +1,16 @@
 import 'dart:collection';
 import 'dart:io' show File;
 
+import 'package:flutter/foundation.dart';
 import 'package:PiliPlus/grpc/bilibili/community/service/dm/v1.pb.dart';
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/data_source.dart';
+import 'package:PiliPlus/services/download/download_manager.dart';
 import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/danmaku_utils.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
-import 'package:PiliPlus/utils/utils.dart';
 import 'package:path/path.dart' as path;
 
 class PlDanmakuController {
@@ -114,19 +115,27 @@ class PlDanmakuController {
   @pragma('vm:notify-debugger-on-exception')
   Future<void> _initFileDm() async {
     try {
-      final file = File(
-        path.join(
-          (_plPlayerController.dataSource as FileSource).dir,
-          PathUtils.danmakuName,
-        ),
-      );
-      if (!file.existsSync()) return;
-      final bytes = await file.readAsBytes();
-      if (bytes.isEmpty) return;
+      final fileSource = _plPlayerController.dataSource as FileSource;
+      Uint8List? bytes;
+      final safUri = fileSource.safFileUris?[PathUtils.danmakuName];
+      if (safUri != null && safUri.startsWith('content:/')) {
+        bytes = await DownloadManager.readSafBytes(safUri);
+      }
+      if (bytes == null || bytes.isEmpty) {
+        final file = File(path.join(fileSource.dir, PathUtils.danmakuName));
+        try {
+          if (file.existsSync()) {
+            bytes = await file.readAsBytes();
+          }
+        } catch (_) {}
+      }
+      if (bytes == null || bytes.isEmpty) return;
       final elem = DmSegMobileReply.fromBuffer(bytes).elems;
       handleDanmaku(elem);
-    } catch (e, s) {
-      Utils.reportError(e, s);
+    } catch (e) {
+      if (kDebugMode) {
+        debugPrint('Danmaku init error: $e');
+      }
     }
   }
 }

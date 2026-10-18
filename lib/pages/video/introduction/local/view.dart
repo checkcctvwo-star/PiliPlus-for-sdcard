@@ -8,6 +8,7 @@ import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/pages/video/introduction/local/controller.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
+import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:get/get.dart';
@@ -80,7 +81,7 @@ class _LocalIntroPanelState extends State<LocalIntroPanel>
                   Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      cover.existsSync()
+                      cover.safeExistsSync
                           ? ClipRRect(
                               borderRadius: Style.mdRadius,
                               child: Image.file(

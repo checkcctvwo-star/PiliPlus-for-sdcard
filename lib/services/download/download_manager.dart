@@ -178,6 +178,17 @@ class DownloadManager {
     }
   }
 
+  static Future<Uint8List?> readSafBytes(String contentUri) async {
+    try {
+      return await _channel.invokeMethod<Uint8List>(
+        'readSafBytes',
+        {'uri': contentUri},
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
   static Future<void> clearSafPfds() async {
     try {
       await _channel.invokeMethod<void>('clearSafPfds');
