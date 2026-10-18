@@ -34,6 +34,10 @@ class UniversalCacheRecoveryEngine {
             final entryFileUri = item['entryFileUri'] as String?;
             final entryDirUri = item['entryDirUri'] as String? ?? '';
             final pageDirUri = item['pageDirUri'] as String? ?? basePath;
+            final rawSafUris = item['safFileUris'];
+            final safMap = rawSafUris is Map
+                ? Map<String, String>.from(rawSafUris)
+                : <String, String>{};
 
             if (jsonStr != null && jsonStr.isNotEmpty) {
               final jsonMap = jsonDecode(jsonStr) as Map<String, dynamic>;
@@ -50,9 +54,12 @@ class UniversalCacheRecoveryEngine {
                   ..pageDirPath = p.dirname(resolvedPhysical);
               }
 
-              entry.safFileUris ??= {};
+              entry.safFileUris = safMap;
               if (entryFileUri != null) {
                 entry.safFileUris![_entryFileName] = entryFileUri;
+              }
+              if (safMap.containsKey(_mp4FileName)) {
+                entry.mediaType = 1;
               }
               recovered.add(entry);
             } else {
@@ -285,6 +292,90 @@ class UniversalCacheRecoveryEngine {
     final result = uniqueMap.values.toList()
       ..sort((a, b) => b.timeUpdateStamp.compareTo(a.timeUpdateStamp));
     return result;
+  }
+
+  /// 扫描应用私有暂存目录中的未提交/中断下载任务
+  static Future<List<BiliDownloadEntryInfo>> scanStagingEntries(
+    String stagingBasePath,
+  ) async {
+    final stagingTasks = <BiliDownloadEntryInfo>[];
+    try {
+      final stagingDir = Directory(stagingBasePath);
+      if (!stagingDir.existsSync()) {
+        return stagingTasks;
+      }
+
+      final pageEntities = stagingDir.listSync();
+      for (final pageEntity in pageEntities) {
+        if (pageEntity is! Directory) continue;
+        final pageDir = pageEntity;
+
+        final entryEntities = pageDir.listSync();
+        for (final entryEntity in entryEntities) {
+          if (entryEntity is! Directory) continue;
+          final entryDir = entryEntity;
+
+          final entryFile = File(p.join(entryDir.path, _entryFileName));
+          if (entryFile.existsSync()) {
+            try {
+              final jsonStr = await entryFile.readAsString();
+              final jsonMap = jsonDecode(jsonStr) as Map<String, dynamic>;
+              final entry = BiliDownloadEntryInfo.fromLenientJson(jsonMap)
+                ..pageDirPath = pageDir.path
+                ..entryDirPath = entryDir.path;
+
+              // 检查暂存目录中已有的媒体切片文件计算实际已下载字节
+              final tag = entry.typeTag;
+              int actualBytes = 0;
+              final rootMp4 = File(p.join(entryDir.path, _mp4FileName));
+              final tagMp4 = tag != null
+                  ? File(p.join(entryDir.path, tag, _mp4FileName))
+                  : null;
+              final videoM4s = tag != null
+                  ? File(p.join(entryDir.path, tag, _videoM4sFileName))
+                  : null;
+              final audioM4s = tag != null
+                  ? File(p.join(entryDir.path, tag, _audioM4sFileName))
+                  : null;
+
+              if (rootMp4.existsSync()) {
+                actualBytes = rootMp4.lengthSync();
+                entry.mediaType = 1;
+              } else if (tagMp4 != null && tagMp4.existsSync()) {
+                actualBytes = tagMp4.lengthSync();
+                entry.mediaType = 1;
+              } else {
+                if (videoM4s != null && videoM4s.existsSync()) {
+                  actualBytes += videoM4s.lengthSync();
+                }
+                if (audioM4s != null && audioM4s.existsSync()) {
+                  actualBytes += audioM4s.lengthSync();
+                }
+              }
+
+              if (actualBytes > 0 && actualBytes > entry.downloadedBytes) {
+                entry.downloadedBytes = actualBytes;
+              }
+              if (entry.totalBytes == 0 && actualBytes > 0) {
+                entry.totalBytes = actualBytes;
+              }
+
+              // 标记为暂停中任务，便于用户或队列无缝续传
+              entry
+                ..isCompleted = false
+                ..status = DownloadStatus.pause;
+
+              stagingTasks.add(entry);
+            } catch (e) {
+              if (kDebugMode) debugPrint('Error scanning staging entry: $e');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      if (kDebugMode) debugPrint('UniversalCacheRecoveryEngine scanStaging error: $e');
+    }
+    return stagingTasks;
   }
 
   static Future<void> _saveEntryJson(File file, BiliDownloadEntryInfo entry) async {

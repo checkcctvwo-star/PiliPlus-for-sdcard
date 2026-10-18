@@ -8,6 +8,9 @@ on:
         required: false
         default: ''
         type: string
+  push:
+    branches:
+      - main
 
 jobs:
   android-debug:

@@ -50,12 +50,9 @@ object SafStorageBridge {
         val ext = fileName.substringAfterLast('.', "")
         val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
 
-        // If target file already exists, remove it first to ensure clean state
-        targetDir.findFile(fileName)?.delete()
-
-        // Create target document directly
-        val targetDoc = targetDir.createFile(mimeType, fileName)
-            ?: targetDir.findFile(fileName)
+        // Use findFile or createFile with write-truncate ("wt") to prevent duplicate "(1)" files on external SD cards
+        val targetDoc = targetDir.findFile(fileName)
+            ?: targetDir.createFile(mimeType, fileName)
             ?: return@withContext Result.failure(IOException("Failed to create SAF document for $fileName"))
 
         try {
@@ -82,7 +79,6 @@ object SafStorageBridge {
             Result.success(targetDoc.uri.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Error committing $fileName to SAF", e)
-            try { targetDoc.delete() } catch (_: Exception) {}
             Result.failure(e)
         }
     }
@@ -125,14 +121,60 @@ object SafStorageBridge {
     /**
      * Opens an input file descriptor from SAF URI and detaches it.
      * Can be used as fdclose://$fd for libmpv.
+     * Supports standard Document URIs and smart fallback for concatenated tree subpaths.
      */
     fun openSafFd(context: Context, uriString: String): Int? {
         return try {
             val uri = Uri.parse(uriString)
-            val pfd = context.contentResolver.openFileDescriptor(uri, "r")
+            val pfd = try {
+                context.contentResolver.openFileDescriptor(uri, "r")
+            } catch (e: Exception) {
+                // If direct open fails, attempt smart resolution via tree contract or traversal
+                Log.w(TAG, "Direct open failed, trying fallback resolution for: $uriString")
+                findDocumentUriFallback(context, uriString)?.let { fallbackUri ->
+                    context.contentResolver.openFileDescriptor(fallbackUri, "r")
+                }
+            }
             pfd?.detachFd()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to open SAF FD for $uriString", e)
+            null
+        }
+    }
+
+    private fun findDocumentUriFallback(context: Context, rawUri: String): Uri? {
+        return try {
+            val parsed = Uri.parse(rawUri)
+            val path = parsed.path ?: return null
+            if (path.contains("/tree/")) {
+                val treeId = android.provider.DocumentsContract.getTreeDocumentId(parsed)
+                val baseTreeUri = android.provider.DocumentsContract.buildTreeDocumentUri(parsed.authority, treeId)
+                val afterTree = rawUri.substringAfter(treeId, "").substringAfter("%3A", "").substringAfter(":", "")
+                if (afterTree.isNotEmpty()) {
+                    val relativeSegments = afterTree.trim('/').split('/').filter { it.isNotEmpty() }
+                    if (relativeSegments.isNotEmpty()) {
+                        // Strategy 1: Build document ID directly: "$treeId/$relPath"
+                        val docId = "$treeId/${relativeSegments.joinToString("/")}"
+                        val docUri = android.provider.DocumentsContract.buildDocumentUriUsingTree(baseTreeUri, docId)
+                        try {
+                            context.contentResolver.openFileDescriptor(docUri, "r")?.close()
+                            return docUri
+                        } catch (_: Exception) {}
+
+                        // Strategy 2: DocumentFile step-by-step traversal
+                        var currentDir = DocumentFile.fromTreeUri(context, baseTreeUri)
+                        for (i in 0 until relativeSegments.size - 1) {
+                            currentDir = currentDir?.findFile(relativeSegments[i])
+                        }
+                        val leafFile = currentDir?.findFile(relativeSegments.last())
+                        if (leafFile != null && leafFile.isFile) {
+                            return leafFile.uri
+                        }
+                    }
+                }
+            }
+            null
+        } catch (_: Exception) {
             null
         }
     }
@@ -157,49 +199,52 @@ object SafStorageBridge {
                 val entryDirs = pageDir.listFiles().filter { it.isDirectory }
                 for (entryDir in entryDirs) {
                     val entryDirName = entryDir.name ?: continue
-                    val entryFile = entryDir.findFile("entry.json")
+                    val safFileUris = mutableMapOf<String, String>()
 
-                    if (entryFile != null && entryFile.isFile) {
+                    // Collect all files in entryDir and its subdirectories (such as 80/0.mp4)
+                    fun collectUris(dir: DocumentFile, prefix: String = "") {
+                        for (file in dir.listFiles()) {
+                            val relName = if (prefix.isEmpty()) file.name.orEmpty() else "$prefix/${file.name}"
+                            if (file.isFile) {
+                                safFileUris[relName] = file.uri.toString()
+                                val baseName = file.name.orEmpty()
+                                if (baseName == "0.mp4") safFileUris["0.mp4"] = file.uri.toString()
+                                if (baseName == "video.m4s") safFileUris["video.m4s"] = file.uri.toString()
+                                if (baseName == "audio.m4s") safFileUris["audio.m4s"] = file.uri.toString()
+                                if (baseName == "entry.json") safFileUris["entry.json"] = file.uri.toString()
+                                if (baseName == "cover.jpg") safFileUris["cover.jpg"] = file.uri.toString()
+                                if (baseName == "danmaku.pb") safFileUris["danmaku.pb"] = file.uri.toString()
+                            } else if (file.isDirectory) {
+                                collectUris(file, file.name.orEmpty())
+                            }
+                        }
+                    }
+                    collectUris(entryDir)
+
+                    val entryFileUri = safFileUris["entry.json"]
+                    var jsonStr: String? = null
+                    if (entryFileUri != null) {
                         try {
-                            context.contentResolver.openInputStream(entryFile.uri)?.use { stream ->
-                                val jsonStr = stream.bufferedReader().use { it.readText() }
-                                entryList.add(
-                                    mapOf(
-                                        "json" to jsonStr,
-                                        "pageDirName" to pageDirName,
-                                        "entryDirName" to entryDirName,
-                                        "entryFileUri" to entryFile.uri.toString(),
-                                        "entryDirUri" to entryDir.uri.toString(),
-                                        "pageDirUri" to pageDir.uri.toString()
-                                    )
-                                )
+                            context.contentResolver.openInputStream(Uri.parse(entryFileUri))?.use { stream ->
+                                jsonStr = stream.bufferedReader().use { it.readText() }
                             }
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to read entry.json in SAF $entryDirName", e)
                         }
-                    } else {
-                        // Check if 0.mp4 exists in entryDir or typeTag subdirectories
-                        var hasMp4 = entryDir.findFile("0.mp4") != null
-                        if (!hasMp4) {
-                            for (sub in entryDir.listFiles().filter { it.isDirectory }) {
-                                if (sub.findFile("0.mp4") != null) {
-                                    hasMp4 = true
-                                    break
-                                }
-                            }
-                        }
-                        if (hasMp4) {
-                            entryList.add(
-                                mapOf(
-                                    "json" to null,
-                                    "pageDirName" to pageDirName,
-                                    "entryDirName" to entryDirName,
-                                    "entryFileUri" to null,
-                                    "entryDirUri" to entryDir.uri.toString(),
-                                    "pageDirUri" to pageDir.uri.toString()
-                                )
+                    }
+
+                    if (jsonStr != null || safFileUris.containsKey("0.mp4") || safFileUris.containsKey("video.m4s")) {
+                        entryList.add(
+                            mapOf(
+                                "json" to jsonStr,
+                                "pageDirName" to pageDirName,
+                                "entryDirName" to entryDirName,
+                                "entryFileUri" to entryFileUri,
+                                "entryDirUri" to entryDir.uri.toString(),
+                                "pageDirUri" to pageDir.uri.toString(),
+                                "safFileUris" to safFileUris
                             )
-                        }
+                        )
                     }
                 }
             }

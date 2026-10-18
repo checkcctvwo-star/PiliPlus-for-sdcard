@@ -97,6 +97,7 @@ class MainActivity : AudioServiceActivity() {
 
                             if (targetType == 2) {
                                 // SAF Mode: commit all files recursively into SAF DocumentFile tree
+                                val committedUris = mutableMapOf<String, String>()
                                 val files = stagingDir.walkTopDown().filter { it.isFile }.toList()
                                 for (file in files) {
                                     val fileSubRel = file.relativeTo(stagingDir).path
@@ -112,7 +113,11 @@ class MainActivity : AudioServiceActivity() {
                                         relativeSubDirPath = subFolder,
                                         fileName = file.name
                                     )
-                                    if (commitRes.isFailure) {
+                                    if (commitRes.isSuccess) {
+                                        val uriStr = commitRes.getOrNull()!!
+                                        committedUris[file.name] = uriStr
+                                        committedUris[fileSubRel] = uriStr
+                                    } else {
                                         if (file.name == "0.mp4" || file.name.endsWith(".m4s")) {
                                             throw commitRes.exceptionOrNull() ?: Exception("Failed to commit media ${file.name} to SAF")
                                         } else {
@@ -121,14 +126,18 @@ class MainActivity : AudioServiceActivity() {
                                     }
                                 }
                                 stagingDir.deleteRecursively()
-                                withContext(Dispatchers.Main) { result.success(true) }
+                                withContext(Dispatchers.Main) {
+                                    result.success(mapOf("success" to true, "safFileUris" to committedUris))
+                                }
                             } else {
                                 // POSIX Mode (0: internal app storage, 1: external SD card sandbox)
                                 val targetDir = File(targetBaseDir, relativePath)
                                 targetDir.mkdirs()
                                 stagingDir.copyRecursively(targetDir, overwrite = true)
                                 stagingDir.deleteRecursively()
-                                withContext(Dispatchers.Main) { result.success(true) }
+                                withContext(Dispatchers.Main) {
+                                    result.success(mapOf("success" to true, "safFileUris" to null))
+                                }
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "commitStagingEntry failed", e)

@@ -129,14 +129,31 @@ class DownloadService extends GetxService {
   void initDownloadList() {
     waitForInitialization = () async {
       await DownloadManager.init();
+
+      // 1. 优先扫描暂存目录（download_staging）中中断或未提交的任务，恢复至待下载队列
+      try {
+        final stagingBase = path.join(appSupportDirPath, 'download_staging');
+        final stagingEntries =
+            await UniversalCacheRecoveryEngine.scanStagingEntries(stagingBase);
+        for (final entry in stagingEntries) {
+          if (!waitDownloadQueue.any((e) => e.cid == entry.cid)) {
+            waitDownloadQueue.add(entry);
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('Failed to recover staging entries: $e');
+      }
+
+      // 2. 扫描并加载已下载完成的离线缓存列表
       await _readDownloadList();
+
+      // 3. 关联 Aria 原生底层未完成任务进度
       final unfinishedTasks = await DownloadManager.getUnfinishedTasks();
       for (final task in unfinishedTasks) {
         final filePath = task['filePath'] as String?;
         if (filePath == null) continue;
 
-        final match = downloadList.firstWhereOrNull((e) {
-          if (e.safFileUris != null) return false;
+        final match = waitDownloadQueue.firstWhereOrNull((e) {
           final typeTag = e.typeTag;
           if (typeTag == null) return false;
           final videoPath1 =
@@ -150,13 +167,14 @@ class DownloadService extends GetxService {
               filePath == audioPath;
         });
 
-        if (match != null && !waitDownloadQueue.contains(match)) {
+        if (match != null) {
           match.status = DownloadStatus.pause;
           match.downloadedBytes =
               (task['currentProgress'] as num?)?.toInt() ?? match.downloadedBytes;
-          waitDownloadQueue.add(match);
         }
       }
+      waitDownloadQueue.refresh();
+      flagNotifier.refresh();
     }();
   }
 
@@ -799,16 +817,23 @@ class DownloadService extends GetxService {
   }
 
   Future<void> _updateBiliDownloadEntryJson(BiliDownloadEntryInfo entry) async {
-    final entryJsonFile = File(path.join(entry.entryDirPath, _entryFile));
-    final tmpFile = File('${entryJsonFile.path}.tmp');
-    await tmpFile.writeAsString(jsonEncode(entry.toJson()), flush: true);
+    if (entry.entryDirPath.startsWith('content://')) {
+      return;
+    }
     try {
-      await tmpFile.rename(entryJsonFile.path);
-    } catch (_) {
-      if (entryJsonFile.existsSync()) {
-        await entryJsonFile.delete();
+      final entryJsonFile = File(path.join(entry.entryDirPath, _entryFile));
+      final tmpFile = File('${entryJsonFile.path}.tmp');
+      await tmpFile.writeAsString(jsonEncode(entry.toJson()), flush: true);
+      try {
+        await tmpFile.rename(entryJsonFile.path);
+      } catch (_) {
+        if (entryJsonFile.existsSync()) {
+          await entryJsonFile.delete();
+        }
+        await tmpFile.rename(entryJsonFile.path);
       }
-      await tmpFile.rename(entryJsonFile.path);
+    } catch (e) {
+      if (kDebugMode) debugPrint('_updateBiliDownloadEntryJson error: $e');
     }
   }
 
@@ -942,24 +967,28 @@ class DownloadService extends GetxService {
     // 如果目标是 SAF 树形目录模式，将暂存目录原子提交到 SAF DocumentFile 树
     if (type == 2 || downloadPath.startsWith('content://')) {
       final stagingEntryPath = entry.entryDirPath;
-      final commitOk = await DownloadManager.commitStagingEntry(
+      final commitRes = await DownloadManager.commitStagingEntry(
         stagingEntryPath: stagingEntryPath,
         targetType: 2,
         targetBaseDir: downloadPath,
         relativePath: '$dirName/$pageDirName',
       );
-      if (commitOk) {
+      if (commitRes != null && commitRes['success'] == true) {
+        final safUris = (commitRes['safFileUris'] as Map?)?.cast<String, String>();
+        if (safUris != null && safUris.isNotEmpty) {
+          entry.safFileUris = safUris;
+        }
         final resolvedTargetBase = await DownloadManager.resolveContentUri(downloadPath);
         if (resolvedTargetBase != null && resolvedTargetBase.isNotEmpty) {
           entry
             ..pageDirPath = path.join(resolvedTargetBase, dirName)
             ..entryDirPath = path.join(resolvedTargetBase, dirName, pageDirName);
+          await _updateBiliDownloadEntryJson(entry);
         } else {
           entry
             ..pageDirPath = downloadPath
             ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
         }
-        await _updateBiliDownloadEntryJson(entry);
       }
     }
 

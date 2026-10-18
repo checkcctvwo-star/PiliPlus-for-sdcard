@@ -41,22 +41,22 @@ class DownloadManager {
   }
 
   /// 将暂存目录中的条目提交到目标目录（POSIX 或 SAF）
-  static Future<bool> commitStagingEntry({
+  static Future<Map<String, dynamic>?> commitStagingEntry({
     required String stagingEntryPath,
     required int targetType,
     required String targetBaseDir,
     required String relativePath,
   }) async {
     try {
-      final res = await _channel.invokeMethod<bool>('commitStagingEntry', {
+      final res = await _channel.invokeMapMethod<String, dynamic>('commitStagingEntry', {
         'stagingEntryPath': stagingEntryPath,
         'targetType': targetType,
         'targetBaseDir': targetBaseDir,
         'relativePath': relativePath,
       });
-      return res ?? false;
+      return res;
     } catch (_) {
-      return false;
+      return null;
     }
   }
 

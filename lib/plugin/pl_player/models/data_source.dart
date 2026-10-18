@@ -23,13 +23,42 @@ class NetworkSource extends DataSource {
 class FileSource extends DataSource {
   final String dir;
   final bool isMp4;
+  final Map<String, String>? safFileUris;
 
   factory FileSource({
     required String dir,
     required bool isMp4,
     required bool hasDashAudio,
     required String typeTag,
+    Map<String, String>? safFileUris,
   }) {
+    if (safFileUris != null && safFileUris.isNotEmpty) {
+      final mp4Uri = safFileUris[PathUtils.videoNameType1] ??
+          safFileUris['$typeTag/${PathUtils.videoNameType1}'];
+      final videoM4sUri = safFileUris[PathUtils.videoNameType2] ??
+          safFileUris['$typeTag/${PathUtils.videoNameType2}'];
+      final audioM4sUri = safFileUris[PathUtils.audioNameType2] ??
+          safFileUris['$typeTag/${PathUtils.audioNameType2}'];
+
+      if (mp4Uri != null) {
+        return FileSource._(
+          dir: dir,
+          isMp4: true,
+          videoSource: mp4Uri,
+          audioSource: null,
+          safFileUris: safFileUris,
+        );
+      } else if (videoM4sUri != null) {
+        return FileSource._(
+          dir: dir,
+          isMp4: false,
+          videoSource: videoM4sUri,
+          audioSource: hasDashAudio ? audioM4sUri : null,
+          safFileUris: safFileUris,
+        );
+      }
+    }
+
     final type1InRoot = path.join(dir, PathUtils.videoNameType1);
     final type1InTag = path.join(dir, typeTag, PathUtils.videoNameType1);
     final videoM4s = path.join(dir, typeTag, PathUtils.videoNameType2);
@@ -47,6 +76,7 @@ class FileSource extends DataSource {
         isMp4: true,
         videoSource: type1InRoot,
         audioSource: null,
+        safFileUris: safFileUris,
       );
     } else if (hasType1Tag) {
       return FileSource._(
@@ -54,6 +84,7 @@ class FileSource extends DataSource {
         isMp4: true,
         videoSource: type1InTag,
         audioSource: null,
+        safFileUris: safFileUris,
       );
     } else if (hasVideoM4s) {
       // 遗留未混流切片：回退为标准双轨 DASH 播放，坚决防止黑屏无声
@@ -62,20 +93,26 @@ class FileSource extends DataSource {
         isMp4: false,
         videoSource: videoM4s,
         audioSource: hasAudioM4s ? audioM4s : (hasDashAudio ? audioM4s : null),
+        safFileUris: safFileUris,
       );
     }
 
     // 兜底逻辑（例如 SAF content:// 协议或特殊挂载）
     final fallbackIsMp4 = isMp4;
+    final isContentUri = dir.startsWith('content:/');
+    final vSource = fallbackIsMp4
+        ? (isContentUri ? '$dir/$typeTag/${PathUtils.videoNameType1}' : type1InTag)
+        : (isContentUri ? '$dir/$typeTag/${PathUtils.videoNameType2}' : path.join(dir, typeTag, PathUtils.videoNameType2));
+    final aSource = fallbackIsMp4 || !hasDashAudio
+        ? null
+        : (isContentUri ? '$dir/$typeTag/${PathUtils.audioNameType2}' : path.join(dir, typeTag, PathUtils.audioNameType2));
+
     return FileSource._(
       dir: dir,
       isMp4: fallbackIsMp4,
-      videoSource: fallbackIsMp4
-          ? type1InTag
-          : path.join(dir, typeTag, PathUtils.videoNameType2),
-      audioSource: fallbackIsMp4 || !hasDashAudio
-          ? null
-          : path.join(dir, typeTag, PathUtils.audioNameType2),
+      videoSource: vSource,
+      audioSource: aSource,
+      safFileUris: safFileUris,
     );
   }
 
@@ -84,6 +121,7 @@ class FileSource extends DataSource {
     required this.isMp4,
     required super.videoSource,
     required super.audioSource,
+    this.safFileUris,
   });
 }
 

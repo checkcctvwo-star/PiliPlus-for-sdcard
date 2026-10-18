@@ -911,13 +911,19 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     String? audio = dataSource.audioSource;
 
     if (dataSource is FileSource && Platform.isAndroid) {
-      if (video.startsWith('content://')) {
+      if (video.startsWith('content:/')) {
+        if (!video.startsWith('content://')) {
+          video = video.replaceFirst('content:/', 'content://');
+        }
         final fd = await DownloadManager.openSafFd(video);
         if (fd != null && fd >= 0) {
           video = 'fdclose://$fd';
         }
       }
-      if (audio != null && audio.startsWith('content://')) {
+      if (audio != null && audio.startsWith('content:/')) {
+        if (!audio.startsWith('content://')) {
+          audio = audio.replaceFirst('content:/', 'content://');
+        }
         final fd = await DownloadManager.openSafFd(audio);
         if (fd != null && fd >= 0) {
           audio = 'fdclose://$fd';

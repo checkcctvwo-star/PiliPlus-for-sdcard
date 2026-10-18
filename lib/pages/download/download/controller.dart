@@ -63,7 +63,7 @@ class DownloadController extends GetxController
           page.entries.add(entry);
         } else {
           season.pages.add(
-            entry.toDownloadPageInfo(pageId, sortKey: seasonInfo!.index),
+            entry.toDownloadPageInfo(pageId, sortKey: seasonInfo?.index),
           );
         }
       } else {
