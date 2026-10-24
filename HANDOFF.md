@@ -1,11 +1,11 @@
-# PiliPlus for SDCard - 智能体交接与测试验证全景指南 (Handoff V5)
+# PiliPlus for SDCard - 智能体交接与测试验证全景指南 (Handoff V6)
 
-> **文档状态**: 生产级测试与交接规约 (Ready for Agent Verification)  
-> **更新时间**: 2026-10-18  
-> **目标版本**: PiliPlus SD `v2.1.9+8` (Commit `b4b8316ff`)  
+> **文档状态**: 生产级测试与交接规约 (Ready for Production / Verified on HarmonyOS 4.2)  
+> **更新时间**: 2026-10-24  
+> **目标版本**: PiliPlus SD `v2.1.10+9` (Release `v2.1.10-sd-20261024-1145`)  
 > **应用信息**: 包名 `com.example.piliplus.sd` / 应用名 `PiliPlus SD` (固定 Debug 签名，支持直接覆盖升级)  
-> **基准上游**: PiliPlus v2.1.6.2 (Commit `b2d6a5bef`)  
-> **测试对象**: 后续接手测试/验证的 AI 智能体 (Verification Agent / Tester) 及开发者
+> **基准上游**: PiliPlus v2.1.6.2  
+> **测试对象**: 华为 MatePad 10.8 (SCMR-W09, HarmonyOS 4.2 API 31)、AI 智能体及后续开发者
 
 ---
 
@@ -17,15 +17,9 @@
   - [2.3 彻底解决“设置中选择 SD 卡存储失效/置灰”与 SAF 计算崩溃](#23-彻底解决设置中选择-sd-卡存储失效置灰与-saf-计算崩溃)
   - [2.4 彻底实现“两阶段暂存提交”与“APP 卸载重装 100% 恢复”](#24-彻底实现两阶段暂存提交与app-卸载重装-100-恢复)
   - [2.5 播放器本地媒体自适应感知与在线回放本地化](#25-播放器本地媒体自适应感知与在线回放本地化)
+  - [2.6 离线缓存界面新功能改造 (下载管理独立入口/物理删除/重新下载/深度重扫自愈)](#26-离线缓存界面新功能改造-下载管理独立入口物理删除重新下载深度重扫自愈)
 - [三、 代码文件改动清单 (Code Inventory)](#三-代码文件改动清单-code-inventory)
 - [四、 测试智能体操作指南 (Step-by-Step Testing & Verification Guide)](#四-测试智能体操作指南-step-by-step-testing--verification-guide)
-  - [4.1 前置准备与 ADB 环境初始化](#41-前置准备与-adb-环境初始化)
-  - [4.2 测试用例 1：常规下载与标准 MP4 混流验证](#42-测试用例-1常规下载与标准-mp4-混流验证)
-  - [4.3 测试用例 2：存储目录三轨切换验证 (本机 / 外置 SD 卡 / SAF)](#43-测试用例-2存储目录三轨切换验证-本机--外置-sd-卡--saf)
-  - [4.4 测试用例 3：冷启动与强杀进程持久化验证 (Persistence Test)](#44-测试用例-3冷启动与强杀进程持久化验证-persistence-test)
-  - [4.5 测试用例 4：终极测试——卸载重装自愈还原验证 (Uninstall Recovery)](#45-测试用例-4终极测试卸载重装自愈还原验证-uninstall-recovery)
-  - [4.6 测试用例 5：底层播放器 (libmpv) 播放与 Seek 验证](#46-测试用例-5底层播放器-libmpv-播放与-seek-验证)
-  - [4.7 测试用例 6：自动化端到端测试套件执行](#47-测试用例-6自动化端到端测试套件执行)
 - [五、 测试验收矩阵与签署检查单 (Verification Checklist)](#五-测试验收矩阵与签署检查单-verification-checklist)
 - [六、 故障排查与应急回退手册 (Troubleshooting & Rollback)](#六-故障排查与应急回退手册-troubleshooting--rollback)
 
@@ -33,15 +27,15 @@
 
 ## 一、 执行摘要与发布资产 (Executive Summary & Release Assets)
 
-针对用户在物理平板（Android 11~14 / 鸿蒙 4.2）上反馈的**“下载文件打不开/黑屏”、“未混流转码成标准 MP4”、“重启后离线缓存消失”、“SD卡目录选择失效/置灰”**等顽疾，经过多专家智能体协同重构，已彻底完成架构跃迁，并通过自动化 CI/CD 流水线构建出最新安装包。
+针对用户在物理平板（Android 11~14 / 鸿蒙 4.2）上反馈的**“下载文件打不开/黑屏”、“未混流转码成标准 MP4”、“重启后离线缓存消失”、“SD卡目录选择失效/置灰”**以及最新提出的**“正在缓存子界面直达”、“多选物理删除文件”、“正在下载/已完成重新下载”、“全选/反选”与“重新扫描刷新缓存自动恢复”**等功能，已通过自动化 CI/CD 流水线构建出最新正式安装包。
 
 ### 📦 GitHub Release 专属发布信息
-- **Release 页面**: [PiliPlus SD – v2.1.9-sd-20261011-0625](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/tag/v2.1.9-sd-20261011-0625)
+- **Release 页面**: [PiliPlus SD – v2.1.10-sd-20261024-1145](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/tag/v2.1.10-sd-20261024-1145)
 - **直接下载资产 (Direct APK Assets)**:
-  - 📱 **ARM64-v8a (绝大多数物理平板首选)**: [piliplus_v2.1.9-sd-20261011-0625_arm64-v8a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.9-sd-20261011-0625/piliplus_v2.1.9-sd-20261011-0625_arm64-v8a.apk)
-  - 📱 **ARMv7a (旧款 32 位设备)**: [piliplus_v2.1.9-sd-20261011-0625_armeabi-v7a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.9-sd-20261011-0625/piliplus_v2.1.9-sd-20261011-0625_armeabi-v7a.apk)
-  - 💻 **x86_64 (电脑安卓模拟器)**: [piliplus_v2.1.9-sd-20261011-0625_x86_64.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.9-sd-20261011-0625/piliplus_v2.1.9-sd-20261011-0625_x86_64.apk)
-- **签名保证**: 使用一致的 Debug 证书签名，版本号 `2.1.9+8`，**支持直接覆盖安装升级，覆盖更新不丢失既有下载数据**。
+  - 📱 **ARM64-v8a (绝大多数物理平板首选)**: [piliplus_v2.1.10-sd-20261024-1145_arm64-v8a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.10-sd-20261024-1145/piliplus_v2.1.10-sd-20261024-1145_arm64-v8a.apk)
+  - 📱 **ARMv7a (旧款 32 位设备)**: [piliplus_v2.1.10-sd-20261024-1145_armeabi-v7a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.10-sd-20261024-1145/piliplus_v2.1.10-sd-20261024-1145_armeabi-v7a.apk)
+  - 💻 **x86_64 (电脑安卓模拟器)**: [piliplus_v2.1.10-sd-20261024-1145_x86_64.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.10-sd-20261024-1145/piliplus_v2.1.10-sd-20261024-1145_x86_64.apk)
+- **签名保证**: 使用一致的 Debug 证书签名，版本号 `2.1.10+9`，**支持直接覆盖安装升级，覆盖更新不丢失既有下载数据**。
 
 ---
 
@@ -146,7 +140,16 @@ flowchart TD
 | `lib/pages/setting/models/extra_settings.dart` | Flutter 设置 | 解除 SD 卡选项置灰限制，统一采用 `DownloadManager.calculateDirSize` 计算缓存大小 |
 | `lib/plugin/pl_player/models/data_source.dart` | Flutter 播放器 | `FileSource` 增加磁盘 `0.mp4` 真实物理存在校验与自适应单流/双流降级 |
 | `lib/pages/video/controller.dart` | Flutter 视频页 | 增加已下载本地文件的智能感知重定向 |
-| `pubspec.yaml` | 项目配置 | 版本号升级为 `2.1.9+8` |
+| `pubspec.yaml` | 项目配置 | 版本号升级为 `2.1.10+9` |
+| `android/app/src/main/kotlin/com/example/piliplus/storage/SafStorageBridge.kt` | Android 原生 | 增加 `deleteSafResource`，支持递归物理彻底删除 SAF DocumentFile 与物理 SD 卡资源 |
+| `lib/services/download/download_manager.dart` | Flutter 业务 | 增加 `deleteSafResource` 与 `getCustomDirectoryUri` 桥接 |
+| `lib/services/download/download_service.dart` | Flutter 业务 | 升级 `deleteDownload` 为全物理删除；增加 `redownloadTasks` 重新下载与 `rescanStorageAndRecover` 深度扫描刷新 |
+| `lib/pages/common/multi_select/base.dart` | Flutter 通用组件 | 增加 `isAllSelected` 与 `toggleSelectAll` 抽象定义及实现，支持全选/取消全选动态联动 |
+| `lib/common/widgets/appbar/appbar.dart` | Flutter 通用组件 | 升级多选 AppBar，支持动态全选文案与自定义删除/移除标签 |
+| `lib/pages/download/downloading/view.dart` | Flutter 下载管理 | 多选支持「全选/取消全选」、彻底「物理删除」与「重新下载」 |
+| `lib/pages/download/download/view.dart` | Flutter 离线缓存 | AppBar 新增「正在缓存 (带Badge)」与「重新扫描缓存」按钮；横条支持点击直达；多选新增「重新下载」 |
+| `lib/pages/download/detail/view.dart` | Flutter 缓存详情 | 多选栏新增「重新下载」按钮 |
+| `.github/workflows/android_sdcard_release.yml` | CI/CD | 动态读取 pubspec.yaml 版本号，升级为正式 Release 自动化发布 |
 | `test/services/download/download_and_mux_test.dart` | 测试套件 (新增) | `FileSource` 自适应双轨及 MP4 判定单元测试 |
 | `test/services/download/storage_system_stress_test.dart` | 测试套件 (新增) | 670 行系统级存储仿真、边界压力与自愈恢复端到端测试套件 |
 | `.agents/skills/flutter-android-saf-cache/SKILL.md` | 项目记忆 (升级) | 升级为 V2.0，写入 exFAT 规约、自适应 FFmpeg 规范与自愈架构铁律 |
