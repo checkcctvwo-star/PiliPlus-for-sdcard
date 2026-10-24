@@ -30,12 +30,12 @@
 针对用户在物理平板（Android 11~14 / 鸿蒙 4.2）上反馈的**“下载文件打不开/黑屏”、“未混流转码成标准 MP4”、“重启后离线缓存消失”、“SD卡目录选择失效/置灰”**以及最新提出的**“正在缓存子界面直达”、“多选物理删除文件”、“正在下载/已完成重新下载”、“全选/反选”与“重新扫描刷新缓存自动恢复”**等功能，已通过自动化 CI/CD 流水线构建出最新正式安装包。
 
 ### 📦 GitHub Release 专属发布信息
-- **Release 页面**: [PiliPlus SD – v2.1.10-sd-20261024-1145](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/tag/v2.1.10-sd-20261024-1145)
+- **Release 页面**: [PiliPlus SD – v2.1.11-sd-20261024-1410](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/tag/v2.1.11-sd-20261024-1410)
 - **直接下载资产 (Direct APK Assets)**:
-  - 📱 **ARM64-v8a (绝大多数物理平板首选)**: [piliplus_v2.1.10-sd-20261024-1145_arm64-v8a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.10-sd-20261024-1145/piliplus_v2.1.10-sd-20261024-1145_arm64-v8a.apk)
-  - 📱 **ARMv7a (旧款 32 位设备)**: [piliplus_v2.1.10-sd-20261024-1145_armeabi-v7a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.10-sd-20261024-1145/piliplus_v2.1.10-sd-20261024-1145_armeabi-v7a.apk)
-  - 💻 **x86_64 (电脑安卓模拟器)**: [piliplus_v2.1.10-sd-20261024-1145_x86_64.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.10-sd-20261024-1145/piliplus_v2.1.10-sd-20261024-1145_x86_64.apk)
-- **签名保证**: 使用一致的 Debug 证书签名，版本号 `2.1.10+9`，**支持直接覆盖安装升级，覆盖更新不丢失既有下载数据**。
+  - 📱 **ARM64-v8a (绝大多数物理平板首选)**: [piliplus_v2.1.11-sd-20261024-1410_arm64-v8a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.11-sd-20261024-1410/piliplus_v2.1.11-sd-20261024-1410_arm64-v8a.apk)
+  - 📱 **ARMv7a (旧款 32 位设备)**: [piliplus_v2.1.11-sd-20261024-1410_armeabi-v7a.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.11-sd-20261024-1410/piliplus_v2.1.11-sd-20261024-1410_armeabi-v7a.apk)
+  - 💻 **x86_64 (电脑安卓模拟器)**: [piliplus_v2.1.11-sd-20261024-1410_x86_64.apk](https://github.com/checkcctvwo-star/PiliPlus-for-sdcard/releases/download/v2.1.11-sd-20261024-1410/piliplus_v2.1.11-sd-20261024-1410_x86_64.apk)
+- **签名保证**: 使用一致的 Debug 证书签名，版本号 `2.1.11+10`，**支持直接覆盖安装升级，覆盖更新不丢失既有下载数据**。
 
 ---
 
