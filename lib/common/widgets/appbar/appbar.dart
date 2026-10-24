@@ -8,12 +8,14 @@ class MultiSelectAppBarWidget extends StatelessWidget
   final bool? visible;
   final AppBar child;
   final List<Widget>? actions;
+  final String? removeLabel;
 
   const MultiSelectAppBarWidget({
     super.key,
     required this.ctr,
     this.visible,
     this.actions,
+    this.removeLabel,
     required this.child,
   });
 
@@ -31,10 +33,12 @@ class MultiSelectAppBarWidget extends StatelessWidget
         ),
         title: Obx(() => Text('已选: ${ctr.checkedCount}')),
         actions: [
-          TextButton(
-            style: style,
-            onPressed: () => ctr.handleSelect(checked: true),
-            child: const Text('全选'),
+          Obx(
+            () => TextButton(
+              style: style,
+              onPressed: ctr.toggleSelectAll,
+              child: Text(ctr.isAllSelected ? '取消全选' : '全选'),
+            ),
           ),
           ...?actions,
           TextButton(
@@ -44,7 +48,7 @@ class MultiSelectAppBarWidget extends StatelessWidget
               ctr.onRemove();
             },
             child: Text(
-              '移除',
+              removeLabel ?? '移除',
               style: TextStyle(color: colorScheme.error),
             ),
           ),

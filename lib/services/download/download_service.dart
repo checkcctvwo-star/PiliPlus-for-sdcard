@@ -188,7 +188,13 @@ class DownloadService extends GetxService {
     final safUri = GStorage.setting.get('downloadPath') as String?;
 
     final folders = <String>{};
-    final downloadPathStr = await _getDownloadPath();
+    String downloadPathStr = await _getDownloadPath();
+    if (type == 2 && safUri != null && safUri.isNotEmpty && Platform.isAndroid) {
+      final resolved = await DownloadManager.resolveContentUri(safUri);
+      if (resolved != null && resolved.isNotEmpty) {
+        downloadPathStr = resolved;
+      }
+    }
     final localDir = Directory(downloadPathStr);
 
     if (localDir.existsSync()) {
@@ -1028,6 +1034,28 @@ class DownloadService extends GetxService {
         downloadNext: downloadNext,
       );
     }
+
+    // 1. Physical deletion via SAF bridge (works for content:// or secondary SD card paths)
+    if (entry.entryDirPath.isNotEmpty) {
+      await DownloadManager.deleteSafResource(entry.entryDirPath);
+    }
+    if (entry.safFileUris != null) {
+      for (final uri in entry.safFileUris!.values) {
+        if (uri.isNotEmpty) {
+          await DownloadManager.deleteSafResource(uri);
+        }
+      }
+    }
+
+    // 2. Local staging deletion
+    final stagingDir = Directory(
+      path.join(appSupportDirPath, 'download_staging', entry.avid.toString(), 'c_${entry.cid}'),
+    );
+    if (stagingDir.existsSync()) {
+      await stagingDir.tryDel(recursive: true);
+    }
+
+    // 3. POSIX directory deletion
     final downloadDir = Directory(entry.pageDirPath);
     if (downloadDir.existsSync()) {
       if (!await downloadDir.lengthGte(2)) {
@@ -1042,6 +1070,82 @@ class DownloadService extends GetxService {
     if (refresh) {
       flagNotifier.refresh();
     }
+  }
+
+  /// 批量彻底重新下载任务
+  Future<void> redownloadTasks(List<BiliDownloadEntryInfo> entries) async {
+    if (entries.isEmpty) return;
+    for (final entry in entries) {
+      if (curDownload.value?.cid == entry.cid) {
+        await cancelDownload(isDelete: false, downloadNext: false);
+      }
+
+      entry.downloadedBytes = 0;
+      entry.status = DownloadStatus.wait;
+      entry.isCompleted = false;
+
+      // 清除本地 staging 遗留切片
+      final stagingDir = Directory(
+        path.join(appSupportDirPath, 'download_staging', entry.avid.toString(), 'c_${entry.cid}'),
+      );
+      if (stagingDir.existsSync()) {
+        await stagingDir.tryDel(recursive: true);
+      }
+
+      // 从已完成列表中移除
+      downloadList.removeWhere((e) => e.cid == entry.cid);
+
+      // 重新放回待下载队列
+      waitDownloadQueue.removeWhere((e) => e.cid == entry.cid);
+      waitDownloadQueue.insert(0, entry);
+    }
+
+    waitDownloadQueue.refresh();
+    flagNotifier.refresh();
+
+    if (curDownload.value == null ||
+        curDownload.value!.status != DownloadStatus.downloading) {
+      nextDownload();
+    }
+  }
+
+  /// 重新扫描存储目录并自动恢复离线视频
+  Future<int> rescanStorageAndRecover() async {
+    final type = GStorage.setting.get(
+      SettingBoxKey.downloadDirType,
+      defaultValue: 0,
+    ) as int;
+
+    if (type == 2 && Platform.isAndroid) {
+      try {
+        final nativeSafUri = await DownloadManager.getCustomDirectoryUri();
+        if (nativeSafUri != null && nativeSafUri.isNotEmpty) {
+          downloadPath = nativeSafUri;
+          await GStorage.setting.put(SettingBoxKey.downloadPath, nativeSafUri);
+        }
+      } catch (_) {}
+    } else {
+      final savedPath = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+      if (savedPath != null && savedPath.isNotEmpty) {
+        downloadPath = savedPath;
+      }
+    }
+
+    // 深度自愈缺失元数据的任务
+    await deepScanRecovery();
+
+    // 重新读取全部离线列表
+    await _readDownloadList();
+
+    // 扫描 staging 临时目录
+    final stagingBase = path.join(appSupportDirPath, 'download_staging');
+    if (Directory(stagingBase).existsSync()) {
+      await UniversalCacheRecoveryEngine.scanStagingEntries(stagingBase);
+    }
+
+    waitDownloadQueue.refresh();
+    flagNotifier.refresh();
+    return downloadList.length;
   }
 
   Future<void> deletePage({

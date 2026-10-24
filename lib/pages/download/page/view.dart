@@ -137,6 +137,25 @@ class _DownloadPagePageState extends State<DownloadPagePage>
     toastUpdateResult(dismiss, isSuccess);
   }
 
+  void _redownloadSelected() {
+    final entries = allChecked
+        .expand((page) => page.entries)
+        .toList();
+    if (entries.isEmpty) return;
+    showConfirmDialog(
+      context: context,
+      title: const Text('确定重新下载选中视频？'),
+      content: Text('将重新下载选中的 ${entries.length} 个视频并覆盖现有文件'),
+      onConfirm: () async {
+        SmartDialog.showLoading(msg: '正在重新加入下载队列...');
+        await downloadService.redownloadTasks(entries);
+        handleSelect();
+        SmartDialog.dismiss();
+        SmartDialog.showToast('已重新加入下载队列 (${entries.length})');
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Obx(() {
@@ -151,7 +170,17 @@ class _DownloadPagePageState extends State<DownloadPagePage>
         child: SimpleScaffold(
           appBar: MultiSelectAppBarWidget(
             ctr: this,
-            actions: [updateBtn()],
+            actions: [
+              updateBtn(),
+              TextButton(
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                onPressed: () {
+                  if (checkedCount == 0) return;
+                  _redownloadSelected();
+                },
+                child: const Text('重新下载'),
+              ),
+            ],
             child: AppBar(
               title: Text(widget.seasonInfo.title),
               actions: [

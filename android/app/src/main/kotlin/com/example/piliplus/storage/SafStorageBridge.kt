@@ -298,4 +298,82 @@ object SafStorageBridge {
         walk(root)
         total
     }
+
+    fun getSavedSafUri(context: Context): String? {
+        val prefs = context.getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
+        return prefs.getString("custom_saf_uri", null)
+    }
+
+    /**
+     * Completely and safely deletes a file or directory, supporting both content:// URIs and
+     * physical paths on secondary external SD cards where raw POSIX delete might fail due to Scoped Storage.
+     */
+    suspend fun deleteSafResource(
+        context: Context,
+        pathOrUri: String,
+        treeUriString: String? = null
+    ): Boolean = withContext(Dispatchers.IO) {
+        try {
+            if (pathOrUri.startsWith("content://")) {
+                val uri = Uri.parse(pathOrUri)
+                if (android.provider.DocumentsContract.isDocumentUri(context, uri)) {
+                    val deleted = try {
+                        android.provider.DocumentsContract.deleteDocument(context.contentResolver, uri)
+                    } catch (_: Exception) { false }
+                    if (deleted) return@withContext true
+                }
+                val doc = DocumentFile.fromSingleUri(context, uri) ?: DocumentFile.fromTreeUri(context, uri)
+                if (doc != null && doc.exists()) {
+                    return@withContext doc.delete()
+                }
+                return@withContext false
+            }
+
+            // Physical path
+            val file = File(pathOrUri)
+            var posixSuccess = false
+            if (file.exists()) {
+                posixSuccess = if (file.isDirectory) file.deleteRecursively() else file.delete()
+            }
+            if (posixSuccess && !file.exists()) {
+                return@withContext true
+            }
+
+            // Fallback via SAF Tree if POSIX failed on external SD card
+            val treeUri = treeUriString ?: getSavedSafUri(context)
+            if (treeUri != null) {
+                val root = DocumentFile.fromTreeUri(context, Uri.parse(treeUri))
+                if (root != null) {
+                    val rootResolvedPath = resolveSafUriToPath(context, treeUri)
+                    val relPath = if (rootResolvedPath != null && pathOrUri.startsWith(rootResolvedPath)) {
+                        pathOrUri.removePrefix(rootResolvedPath).trim('/')
+                    } else {
+                        val segments = pathOrUri.split("/").filter { it.isNotEmpty() }
+                        val piliIdx = segments.indexOf("piliplus")
+                        if (piliIdx >= 0 && piliIdx + 1 < segments.size) {
+                            segments.subList(piliIdx + 1, segments.size).joinToString("/")
+                        } else {
+                            ""
+                        }
+                    }
+
+                    if (relPath.isNotEmpty()) {
+                        var curr: DocumentFile? = root
+                        val parts = relPath.split("/").filter { it.isNotEmpty() }
+                        for (part in parts) {
+                            curr = curr?.findFile(part)
+                            if (curr == null) break
+                        }
+                        if (curr != null && curr.exists()) {
+                            return@withContext curr.delete()
+                        }
+                    }
+                }
+            }
+            posixSuccess
+        } catch (e: Exception) {
+            Log.e(TAG, "deleteSafResource failed for $pathOrUri", e)
+            false
+        }
+    }
 }

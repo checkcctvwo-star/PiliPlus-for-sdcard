@@ -8,10 +8,21 @@ import 'package:PiliPlus/utils/extension/string_ext.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 
 class DownloadManager {
   static const MethodChannel _channel = MethodChannel('com.piliplus/download');
+
+  /// 获取原生持久化保存的自定义 SAF Tree URI
+  static Future<String?> getCustomDirectoryUri() async {
+    if (!Platform.isAndroid) return null;
+    try {
+      return await _channel.invokeMethod<String>('getCustomDirectoryUri');
+    } catch (_) {
+      return null;
+    }
+  }
 
   /// 混流音视频（video.m4s + audio.m4s -> 0.mp4）
   static Future<bool> mergeDashMedia({
@@ -83,6 +94,21 @@ class DownloadManager {
       return res ?? 0;
     } catch (_) {
       return 0;
+    }
+  }
+
+  /// 彻底删除 SAF DocumentFile 或外部 SD 卡资源
+  static Future<bool> deleteSafResource(String pathOrUri, {String? treeUri}) async {
+    if (!Platform.isAndroid) return false;
+    try {
+      final res = await _channel.invokeMethod<bool>('deleteSafResource', {
+        'pathOrUri': pathOrUri,
+        ?'treeUri': treeUri,
+      });
+      return res ?? false;
+    } catch (e) {
+      if (kDebugMode) debugPrint('deleteSafResource error: $e');
+      return false;
     }
   }
 

@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:PiliPlus/common/widgets/appbar/appbar.dart';
+import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/flutter/pop_scope.dart';
 import 'package:PiliPlus/common/widgets/loading_widget/http_error.dart';
 import 'package:PiliPlus/common/widgets/scaffold/simple_scaffold.dart';
@@ -12,6 +13,7 @@ import 'package:PiliPlus/pages/download/download/controller.dart';
 import 'package:PiliPlus/pages/download/download/widgets/page.dart';
 import 'package:PiliPlus/pages/download/download/widgets/season.dart';
 import 'package:PiliPlus/pages/download/download_action_mixin.dart';
+import 'package:PiliPlus/pages/download/downloading/view.dart';
 import 'package:PiliPlus/pages/download/search/view.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
@@ -125,6 +127,38 @@ class _DownloadPageState extends State<DownloadPage>
     toastUpdateResult(dismiss, isSuccess);
   }
 
+  Future<void> _onRescanCache() async {
+    SmartDialog.showLoading(msg: '正在重新扫描存储目录...');
+    try {
+      final count = await downloadService.rescanStorageAndRecover();
+      SmartDialog.dismiss();
+      SmartDialog.showToast('扫描完成，已同步 $count 部离线视频');
+    } catch (e) {
+      SmartDialog.dismiss();
+      SmartDialog.showToast('扫描出错: $e');
+    }
+  }
+
+  void _redownloadSelected() {
+    final entries = _controller.allChecked
+        .expand((season) => season.pages)
+        .expand((page) => page.entries)
+        .toList();
+    if (entries.isEmpty) return;
+    showConfirmDialog(
+      context: context,
+      title: const Text('确定重新下载选中视频？'),
+      content: Text('将重新下载选中的 ${entries.length} 个视频并覆盖现有文件'),
+      onConfirm: () async {
+        SmartDialog.showLoading(msg: '正在重新加入下载队列...');
+        await downloadService.redownloadTasks(entries);
+        _controller.handleSelect();
+        SmartDialog.dismiss();
+        SmartDialog.showToast('已重新加入下载队列 (${entries.length})');
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final padding = MediaQuery.viewPaddingOf(context);
@@ -140,10 +174,39 @@ class _DownloadPageState extends State<DownloadPage>
         child: SimpleScaffold(
           appBar: MultiSelectAppBarWidget(
             ctr: _controller,
-            actions: [updateBtn()],
+            actions: [
+              updateBtn(),
+              TextButton(
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                onPressed: () {
+                  if (_controller.checkedCount == 0) return;
+                  _redownloadSelected();
+                },
+                child: const Text('重新下载'),
+              ),
+            ],
             child: AppBar(
               title: const Text('离线缓存'),
               actions: [
+                IconButton(
+                  tooltip: '重新扫描缓存',
+                  onPressed: _onRescanCache,
+                  icon: const Icon(Icons.sync),
+                ),
+                Obx(() {
+                  final count = downloadService.waitDownloadQueue.length;
+                  return IconButton(
+                    tooltip: '正在缓存',
+                    onPressed: () {
+                      Get.to(() => const DownloadingPage());
+                    },
+                    icon: Badge(
+                      isLabelVisible: count > 0,
+                      label: Text('$count'),
+                      child: const Icon(Icons.downloading_outlined),
+                    ),
+                  );
+                }),
                 IconButton(
                   tooltip: '搜索',
                   onPressed: () async {
@@ -182,10 +245,35 @@ class _DownloadPageState extends State<DownloadPage>
                     return SliverMainAxisGroup(
                       slivers: [
                         SliverPadding(
-                          padding: const EdgeInsets.only(left: 12, bottom: 7),
+                          padding: const EdgeInsets.only(left: 12, bottom: 7, right: 12),
                           sliver: SliverToBoxAdapter(
-                            child: Text(
-                              '正在缓存 (${downloadService.waitDownloadQueue.length})',
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(6),
+                              onTap: () => Get.to(() => const DownloadingPage()),
+                              child: Padding(
+                                padding: const EdgeInsets.symmetric(vertical: 2),
+                                child: Row(
+                                  children: [
+                                    Text(
+                                      '正在缓存 (${downloadService.waitDownloadQueue.length})',
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                    const Spacer(),
+                                    Text(
+                                      '查看全部',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context).colorScheme.primary,
+                                      ),
+                                    ),
+                                    Icon(
+                                      Icons.chevron_right,
+                                      size: 16,
+                                      color: Theme.of(context).colorScheme.primary,
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ),
                         ),

@@ -214,6 +214,20 @@ class MainActivity : AudioServiceActivity() {
                     }
                 }
 
+                // ── SAF / Physical Resource Deletion ────────────────────────────
+                "deleteSafResource" -> {
+                    val pathOrUri = call.argument<String>("pathOrUri")
+                    val treeUri = call.argument<String>("treeUri")
+                    if (pathOrUri != null) {
+                        CoroutineScope(Dispatchers.IO).launch {
+                            val success = SafStorageBridge.deleteSafResource(this@MainActivity, pathOrUri, treeUri)
+                            withContext(Dispatchers.Main) { result.success(success) }
+                        }
+                    } else {
+                        result.error("INVALID_ARGS", "pathOrUri is null", null)
+                    }
+                }
+
                 // ── External SD Card Path Bridge ─────────────────────────────────
                 "getExternalSDCardPath" -> {
                     val externalDirs = getExternalFilesDirs(null)

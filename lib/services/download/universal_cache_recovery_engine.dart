@@ -76,6 +76,7 @@ class UniversalCacheRecoveryEngine {
                 cover: '',
                 preferedVideoQuality: 80,
                 qualityPithyDescription: '高清',
+                typeTag: '80',
                 guessedTotalBytes: 0,
                 totalTimeMilli: 0,
                 danmakuCount: 0,

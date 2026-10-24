@@ -45,6 +45,17 @@ class _DownloadingPageState extends State<DownloadingPage>
         child: SimpleScaffold(
           appBar: MultiSelectAppBarWidget(
             ctr: this,
+            removeLabel: '删除',
+            actions: [
+              TextButton(
+                style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+                onPressed: () {
+                  if (checkedCount == 0) return;
+                  _onRedownload();
+                },
+                child: const Text('重新下载'),
+              ),
+            ],
             child: AppBar(
               title: const Text('正在缓存'),
               actions: [
@@ -101,13 +112,30 @@ class _DownloadingPageState extends State<DownloadingPage>
     });
   }
 
+  void _onRedownload() {
+    final selected = allChecked.toList();
+    if (selected.isEmpty) return;
+    showConfirmDialog(
+      context: context,
+      title: const Text('确定重新下载选中任务？'),
+      onConfirm: () async {
+        SmartDialog.showLoading(msg: '正在重新加入下载队列...');
+        await _downloadService.redownloadTasks(selected);
+        handleSelect(checked: false);
+        SmartDialog.dismiss();
+        SmartDialog.showToast('已重新开始 ${selected.length} 个任务');
+      },
+    );
+  }
+
   @override
   void onRemove() {
     showConfirmDialog(
       context: context,
-      title: const Text('确定删除选中视频？'),
+      title: const Text('确定彻底删除选中任务？'),
+      content: const Text('将同时彻底删除存储/SD卡中的临时切片与已下载视频文件'),
       onConfirm: () async {
-        SmartDialog.showLoading();
+        SmartDialog.showLoading(msg: '正在彻底删除...');
         final allChecked = this.allChecked.toSet();
         final isDownloading =
             _downloadService.curDownload.value?.status ==
@@ -115,6 +143,8 @@ class _DownloadingPageState extends State<DownloadingPage>
         for (final entry in allChecked) {
           await _downloadService.deleteDownload(
             entry: entry,
+            removeQueue: true,
+            removeList: true,
             refresh: false,
             downloadNext: false,
           );
@@ -123,11 +153,9 @@ class _DownloadingPageState extends State<DownloadingPage>
         if (isDownloading && _downloadService.curDownload.value == null) {
           _downloadService.nextDownload();
         }
-        if (enableMultiSelect.value) {
-          rxCount.value = 0;
-          enableMultiSelect.value = false;
-        }
+        handleSelect(checked: false);
         SmartDialog.dismiss();
+        SmartDialog.showToast('已彻底删除选中的 ${allChecked.length} 个任务');
       },
     );
   }

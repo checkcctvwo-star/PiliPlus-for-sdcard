@@ -10,6 +10,8 @@ abstract interface class MultiSelectBase<T extends MultiSelectData> {
   RxBool get enableMultiSelect;
 
   int get checkedCount;
+  bool get isAllSelected;
+  void toggleSelectAll();
 
   void onSelect(T item);
   void handleSelect({bool checked = false, bool disableSelect = true});
@@ -21,6 +23,14 @@ mixin BaseMultiSelectMixin<T extends MultiSelectData>
   late final RxInt rxCount = 0.obs;
   @override
   int get checkedCount => rxCount.value;
+
+  @override
+  bool get isAllSelected => list.isNotEmpty && checkedCount == list.length;
+
+  @override
+  void toggleSelectAll() {
+    handleSelect(checked: !isAllSelected, disableSelect: false);
+  }
 
   @override
   final RxBool enableMultiSelect = false.obs;
@@ -68,6 +78,19 @@ mixin CommonMultiSelectMixin<T extends MultiSelectData>
 
   @override
   int get checkedCount => rxCount.value;
+
+  @override
+  bool get isAllSelected {
+    if (loadingState.value case Success(:final response)) {
+      return response != null && response.isNotEmpty && checkedCount == response.length;
+    }
+    return false;
+  }
+
+  @override
+  void toggleSelectAll() {
+    handleSelect(checked: !isAllSelected, disableSelect: false);
+  }
 
   Iterable<T> get allChecked =>
       loadingState.value.data!.where((v) => v.checked);
