@@ -31,15 +31,6 @@ class MainActivity : AudioServiceActivity() {
     private var migrationJob: Job? = null
     private var progressSink: EventChannel.EventSink? = null
 
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        try {
-            Aria.init(this)
-        } catch (e: Exception) {
-            Log.w(TAG, "Aria.init failed: $e")
-        }
-    }
-
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -568,6 +559,11 @@ class MainActivity : AudioServiceActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        try {
+            Aria.init(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "Aria.init failed: $e")
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             window.attributes.layoutInDisplayCutoutMode =
                 LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
