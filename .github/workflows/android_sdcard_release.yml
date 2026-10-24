@@ -71,7 +71,8 @@ jobs:
         run: |
           SUFFIX="${{ github.event.inputs.tag_suffix }}"
           if [ -z "$SUFFIX" ]; then
-            SUFFIX="v2.1.9-sd-$(date +'%Y%m%d-%H%M')"
+            VERSION=$(grep '^version:' pubspec.yaml | head -n 1 | awk '{print $2}' | cut -d'+' -f1)
+            SUFFIX="v${VERSION}-sd-$(date +'%Y%m%d-%H%M')"
           fi
           TAG="${SUFFIX}"
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
@@ -111,31 +112,35 @@ jobs:
           path: piliplus_*_x86_64.apk
           retention-days: 90
 
-      # Create a pre-release on GitHub Releases with all three APKs
-      - name: Create GitHub Pre-Release
+      # Create a formal release on GitHub Releases with all three APKs
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          prerelease: true
+          prerelease: false
           name: "PiliPlus SD – ${{ steps.tag.outputs.tag }}"
           body: |
-            ## PiliPlus SD 专属预发布版 (${{ steps.tag.outputs.tag }})
+            ## PiliPlus SD 正式发布版 (${{ steps.tag.outputs.tag }})
 
             ### 🚀 核心更新与技术重构
-            1. **上游最新 v2.1.6.2 代码完全同步**：无损继承 SponsorBlock 片段跳过、UGC/PGC 视频合集离线下载等最新能力。
-            2. **借鉴 BiliTools 16KB FFmpegKit 混流引擎**：
-               - 下载后自动触发原生 FFmpegKit (`-c copy -shortest -strict unofficial -movflags +faststart`) 将分离的 `video.m4s` 与 `audio.m4s` 合并为标准 `0.mp4`；
-               - 16KB Page Size 完美适配 Android 15/16 设备，杜绝动态库载入奔溃；
-               - 彻底终结 libmpv `edl://` 播放双流导致的音画不同步、黑屏打不开问题。
-            3. **外置 SD 卡双轨存储与 POSIX 直读直写**：
-               - 优先使用外置 SD 卡应用专属沙盒目录 (`/storage/XXXX-XXXX/Android/data/com.example.piliplus.sd/files/download`)；
-               - 无需任何繁琐 SAF 授权，获得 100% 原生 POSIX 读写权限，libmpv 秒级直启播放。
-            4. **工业级断点续传与网络防封**：
-               - 粘性 If-Range 校验器，精准处理 206 / 200 / 416 状态码；
-               - 强效 Content-Length 终态完整性校验，杜绝残缺切片；
-               - 600ms 串行退避扫描机制，彻底绕过 B 站风控 WAF 412。
-            5. **原子级元数据持久化**：
-               - 去中心化 `entry.json` 采用 `.tmp` + POSIX rename 原子替换，防止杀后台损坏元数据。
+            1. **离线缓存独立「正在缓存」子界面**：
+               - 离线缓存界面右上角新增独立入口按钮（附带当前未完成任务数量角标 Badge），支持直达；
+               - 列表顶部「正在缓存」横条新增「查看全部」快捷入口，方便实时掌控多任务下载进度。
+            2. **正在缓存批量物理删除与全选重构**：
+               - 正在缓存界面全面支持批量多选，彻底将「移除」升级为真实的「物理删除」；
+               - 删除任务时自动通过底层 SAF Bridge 与 POSIX 体系同步清除外置 SD 卡或内部存储中的切片与目录，不留残余冗余；
+               - 新增「全选 / 取消全选」联动切换与一键「重新下载」按钮（自动清空进度、重置状态并重新排队）。
+            3. **离线缓存深度重新扫描与自愈恢复**：
+               - 离线缓存界面右上角新增「重新扫描缓存」按钮（同步图标）；
+               - 支持一键深度遍历用户指定的 SD 卡存储目录（支持 SAF Tree URI 与 POSIX 物理路径双向解析）；
+               - 自动识别原有离线视频，对缺失 `entry.json` 元数据的孤立目录自动通过 B 站 API 重建并补齐信息，恢复即可正常流畅观看。
+            4. **已缓存视频支持批量「重新下载」**：
+               - 离线缓存主页与合集分 P 详情页在多选模式下新增「重新下载」按钮；
+               - 支持快速将已缓存好的视频批量重置并重新加入下载队列拉取。
+            5. **外置 SD 卡兼容性与底层流媒体架构稳定**：
+               - 深度适配 Android 11~15 Scoped Storage (SAF) 外置 SD 卡写入权限与自包含目录架构；
+               - 混流后自动通过 16KB FFmpegKit 生成标准单文件 `0.mp4`，杜绝动态库崩溃；
+               - 底层流媒体播放器通过 `openSafFd/fdclose` 管道通信秒级起播，彻底告别黑屏转圈、音画不同步及清理后台任务丢失问题。
 
             ### 📦 APK 安装包说明
             | 安装包文件 | 适用芯片架构 | 推荐设备 |
@@ -144,5 +149,5 @@ jobs:
             | `piliplus_*_armeabi-v7a.apk` | 32 位 ARM | 较旧的安卓设备 |
             | `piliplus_*_x86_64.apk` | x86_64 | 电脑安卓模拟器 |
 
-            > ⚠️ 本版本包名为 `com.example.piliplus.sd`，应用名为 `PiliPlus SD`，采用一致的 Debug 签名构建，可直接覆盖安装后续同款更新。
+            > ⚠️ 本版本包名为 `com.example.piliplus.sd`，应用名为 `PiliPlus SD`，采用一致的签名构建，可直接覆盖安装后续同款更新。
           files: piliplus_*.apk

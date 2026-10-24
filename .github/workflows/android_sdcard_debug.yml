@@ -61,7 +61,8 @@ jobs:
             TAG=$(gh release list --limit 1 --json tagName --jq '.[0].tagName')
           fi
           if [ -z "$TAG" ]; then
-            TAG="v2.1.9-sd-$(date +'%Y%m%d-%H%M')"
+            VERSION=$(grep '^version:' pubspec.yaml | head -n 1 | awk '{print $2}' | cut -d'+' -f1)
+            TAG="v${VERSION}-sd-$(date +'%Y%m%d-%H%M')"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Target Release Tag: ${TAG}"

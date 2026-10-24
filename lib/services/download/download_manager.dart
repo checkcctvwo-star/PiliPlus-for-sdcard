@@ -103,7 +103,7 @@ class DownloadManager {
     try {
       final res = await _channel.invokeMethod<bool>('deleteSafResource', {
         'pathOrUri': pathOrUri,
-        ?'treeUri': treeUri,
+        if (treeUri != null) 'treeUri': treeUri,
       });
       return res ?? false;
     } catch (e) {
