@@ -1,16 +1,6 @@
 name: Android Release Build (SD Card Fix)
 
 on:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - '**.md'
-      - '.agents/**'
-      - '.worktrees/**'
-      - 'docs/**'
-      - 'tools/**'
-      - '.github/workflows/android_sdcard_debug.yml'
   workflow_dispatch:
     inputs:
       tag_suffix:

@@ -2,6 +2,7 @@ import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
+import 'package:PiliPlus/common/widgets/image/download_cover_image.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/select_mask.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
@@ -109,11 +110,28 @@ class SeasonInfoItem extends StatelessWidget {
                   AspectRatio(
                     aspectRatio: Style.aspectRatio,
                     child: LayoutBuilder(
-                      builder: (context, constraints) => NetworkImgLayer(
-                        src: seasonInfo.cover,
-                        width: constraints.maxWidth,
-                        height: constraints.maxHeight,
-                      ),
+                      builder: (context, constraints) {
+                        if (seasonInfo.cover.isNotEmpty) {
+                          return NetworkImgLayer(
+                            src: seasonInfo.cover,
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                          );
+                        }
+                        final firstEntry = season.pages.firstOrNull?.entries.firstOrNull;
+                        if (firstEntry != null) {
+                          return DownloadCoverImage(
+                            entry: firstEntry,
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                          );
+                        }
+                        return NetworkImgLayer(
+                          src: seasonInfo.cover,
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                        );
+                      },
                     ),
                   ),
                   const PBadge(text: '合集', top: 6.0, right: 6.0),

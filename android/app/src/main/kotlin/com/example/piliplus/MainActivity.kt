@@ -31,6 +31,15 @@ class MainActivity : AudioServiceActivity() {
     private var migrationJob: Job? = null
     private var progressSink: EventChannel.EventSink? = null
 
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        try {
+            Aria.init(this)
+        } catch (e: Exception) {
+            Log.w(TAG, "Aria.init failed: $e")
+        }
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
 
@@ -250,51 +259,73 @@ class MainActivity : AudioServiceActivity() {
 
                 // ── Aria Download Control ────────────────────────────────────────
                 "startDownload" -> {
-                    val url = call.argument<String>("url")
-                    val path = call.argument<String>("path")
-                    if (url != null && path != null) {
-                        Aria.download(this).load(url).setFilePath(path).create()
-                        result.success(true)
-                    } else {
-                        result.error("INVALID_ARGS", "url or path is null", null)
+                    try {
+                        val url = call.argument<String>("url")
+                        val path = call.argument<String>("path")
+                        if (url != null && path != null) {
+                            Aria.download(this).load(url).setFilePath(path).create()
+                            result.success(true)
+                        } else {
+                            result.error("INVALID_ARGS", "url or path is null", null)
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "startDownload error: $e")
+                        result.success(false)
                     }
                 }
                 "pauseDownload", "pauseAll" -> {
-                    Aria.download(this).stopAllTask()
+                    try {
+                        Aria.download(this).stopAllTask()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "pauseAll error: $e")
+                    }
                     result.success(true)
                 }
                 "resumeAll" -> {
-                    Aria.download(this).resumeAllTask()
+                    try {
+                        Aria.download(this).resumeAllTask()
+                    } catch (e: Exception) {
+                        Log.w(TAG, "resumeAll error: $e")
+                    }
                     result.success(true)
                 }
                 "resumeFailedTasks" -> {
-                    val notComplete = Aria.download(this).allNotCompleteTask
-                    if (notComplete != null) {
-                        for (task in notComplete) {
-                            if (task.state == com.arialyy.aria.core.inf.IEntity.STATE_FAIL || task.state == com.arialyy.aria.core.inf.IEntity.STATE_WAIT) {
-                                Aria.download(this).load(task.id).resume()
+                    try {
+                        val notComplete = Aria.download(this).allNotCompleteTask
+                        if (notComplete != null) {
+                            for (task in notComplete) {
+                                if (task.state == com.arialyy.aria.core.inf.IEntity.STATE_FAIL || task.state == com.arialyy.aria.core.inf.IEntity.STATE_WAIT) {
+                                    Aria.download(this).load(task.id).resume()
+                                }
                             }
                         }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "resumeFailedTasks error: $e")
                     }
                     result.success(true)
                 }
                 "getUnfinishedTasks" -> {
-                    val notComplete = Aria.download(this).allNotCompleteTask
-                    val resultList = mutableListOf<Map<String, Any?>>()
-                    if (notComplete != null) {
-                        for (task in notComplete) {
-                            val map = mapOf(
-                                "id" to task.id,
-                                "filePath" to task.filePath,
-                                "currentProgress" to task.currentProgress,
-                                "fileSize" to task.fileSize,
-                                "state" to task.state,
-                                "extendField" to task.str
-                            )
-                            resultList.add(map)
+                    try {
+                        val notComplete = Aria.download(this).allNotCompleteTask
+                        val resultList = mutableListOf<Map<String, Any?>>()
+                        if (notComplete != null) {
+                            for (task in notComplete) {
+                                val map = mapOf(
+                                    "id" to task.id,
+                                    "filePath" to task.filePath,
+                                    "currentProgress" to task.currentProgress,
+                                    "fileSize" to task.fileSize,
+                                    "state" to task.state,
+                                    "extendField" to task.str
+                                )
+                                resultList.add(map)
+                            }
                         }
+                        result.success(resultList)
+                    } catch (e: Exception) {
+                        Log.w(TAG, "getUnfinishedTasks error: $e")
+                        result.success(emptyList<Map<String, Any?>>())
                     }
-                    result.success(resultList)
                 }
 
                 // ── SAF Storage Access Framework ─────────────────────────────────

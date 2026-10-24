@@ -1,19 +1,14 @@
-import 'dart:io';
-
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
-import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
+import 'package:PiliPlus/common/widgets/image/download_cover_image.dart';
 import 'package:PiliPlus/models/common/badge_type.dart';
 import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models_new/download/bili_download_entry_info.dart';
 import 'package:PiliPlus/pages/video/introduction/local/controller.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
-import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
-import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:path/path.dart' as path;
 
 class LocalIntroPanel extends StatefulWidget {
   const LocalIntroPanel({super.key, required this.heroTag});
@@ -55,7 +50,6 @@ class _LocalIntroPanelState extends State<LocalIntroPanel>
     BiliDownloadEntryInfo entry,
   ) {
     final outline = theme.colorScheme.outline;
-    final cover = File(path.join(entry.entryDirPath, PathUtils.coverName));
     final cacheWidth = entry.pageData?.cacheWidth ?? false;
     return Padding(
       padding: const EdgeInsets.only(bottom: 2),
@@ -81,33 +75,13 @@ class _LocalIntroPanelState extends State<LocalIntroPanel>
                   Stack(
                     clipBehavior: Clip.none,
                     children: [
-                      cover.safeExistsSync
-                          ? ClipRRect(
-                              borderRadius: Style.mdRadius,
-                              child: Image.file(
-                                cover,
-                                width: 160,
-                                height: 100,
-                                fit: BoxFit.cover,
-                                cacheWidth: cacheWidth
-                                    ? 160.cacheSize(context)
-                                    : null,
-                                cacheHeight: cacheWidth
-                                    ? null
-                                    : 100.cacheSize(context),
-                                colorBlendMode: NetworkImgLayer.reduce
-                                    ? BlendMode.modulate
-                                    : null,
-                                color: NetworkImgLayer.reduce
-                                    ? NetworkImgLayer.reduceLuxColor
-                                    : null,
-                              ),
-                            )
-                          : NetworkImgLayer(
-                              src: entry.cover,
-                              width: 160,
-                              height: 100,
-                            ),
+                      DownloadCoverImage(
+                        entry: entry,
+                        width: 160,
+                        height: 100,
+                        cacheWidth: cacheWidth ? 160.cacheSize(context) : null,
+                        cacheHeight: cacheWidth ? null : 100.cacheSize(context),
+                      ),
                       PBadge(
                         text: DurationUtils.formatDuration(
                           entry.totalTimeMilli ~/ 1000,

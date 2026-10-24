@@ -1,11 +1,10 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
-import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
+import 'package:PiliPlus/common/widgets/image/download_cover_image.dart';
 import 'package:PiliPlus/common/widgets/progress_bar/video_progress_indicator.dart';
 import 'package:PiliPlus/common/widgets/select_mask.dart';
 import 'package:PiliPlus/models/common/badge_type.dart';
@@ -17,16 +16,13 @@ import 'package:PiliPlus/pages/common/multi_select/base.dart';
 import 'package:PiliPlus/pages/download/downloading/view.dart';
 import 'package:PiliPlus/services/download/download_service.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
-import 'package:PiliPlus/utils/extension/file_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
-import 'package:PiliPlus/utils/path_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
 import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:material_ui/material_ui.dart';
-import 'package:path/path.dart' as path;
 
 class DetailItem extends StatelessWidget {
   const DetailItem({
@@ -205,9 +201,6 @@ class DetailItem extends StatelessWidget {
                     aspectRatio: Style.aspectRatio,
                     child: LayoutBuilder(
                       builder: (context, constraints) {
-                        final cover = File(
-                          path.join(entry.entryDirPath, PathUtils.coverName),
-                        );
                         final maxWidth = constraints.maxWidth;
                         final maxHeight = constraints.maxHeight;
                         int? cacheWidth, cacheHeight;
@@ -216,30 +209,13 @@ class DetailItem extends StatelessWidget {
                         } else {
                           cacheHeight = maxHeight.cacheSize(context);
                         }
-                        return cover.safeExistsSync
-                            ? ClipRRect(
-                                borderRadius: Style.mdRadius,
-                                child: Image.file(
-                                  cover,
-                                  width: maxWidth,
-                                  height: maxHeight,
-                                  fit: BoxFit.cover,
-                                  cacheWidth: cacheWidth,
-                                  cacheHeight: cacheHeight,
-                                  colorBlendMode: NetworkImgLayer.reduce
-                                      ? BlendMode.modulate
-                                      : null,
-                                  color: NetworkImgLayer.reduce
-                                      ? NetworkImgLayer.reduceLuxColor
-                                      : null,
-                                ),
-                              )
-                            : NetworkImgLayer(
-                                src: entry.cover,
-                                width: maxWidth,
-                                height: maxHeight,
-                                cacheWidth: entry.pageData?.cacheWidth,
-                              );
+                        return DownloadCoverImage(
+                          entry: entry,
+                          width: maxWidth,
+                          height: maxHeight,
+                          cacheWidth: cacheWidth,
+                          cacheHeight: cacheHeight,
+                        );
                       },
                     ),
                   ),

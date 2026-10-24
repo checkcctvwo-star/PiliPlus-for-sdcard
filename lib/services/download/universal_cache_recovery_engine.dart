@@ -98,6 +98,7 @@ class UniversalCacheRecoveryEngine {
               )
                 ..pageDirPath = pageDirUri
                 ..entryDirPath = entryDirUri
+                ..safFileUris = safMap
                 ..status = DownloadStatus.completed;
 
               recovered.add(synthetic);

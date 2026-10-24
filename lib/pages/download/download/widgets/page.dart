@@ -2,6 +2,7 @@ import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/common/widgets/badge.dart';
 import 'package:PiliPlus/common/widgets/dialog/dialog.dart';
 import 'package:PiliPlus/common/widgets/dialog/simple_dialog_option.dart';
+import 'package:PiliPlus/common/widgets/image/download_cover_image.dart';
 import 'package:PiliPlus/common/widgets/image/network_img_layer.dart';
 import 'package:PiliPlus/common/widgets/select_mask.dart';
 import 'package:PiliPlus/models_new/download/download_info.dart';
@@ -109,11 +110,27 @@ class PageInfoItem<T extends MultiSelectData> extends StatelessWidget {
                   AspectRatio(
                     aspectRatio: Style.aspectRatio,
                     child: LayoutBuilder(
-                      builder: (context, constraints) => NetworkImgLayer(
-                        src: pageInfo.cover,
-                        width: constraints.maxWidth,
-                        height: constraints.maxHeight,
-                      ),
+                      builder: (context, constraints) {
+                        if (pageInfo.cover.isNotEmpty) {
+                          return NetworkImgLayer(
+                            src: pageInfo.cover,
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                          );
+                        }
+                        if (pageInfo.entries.isNotEmpty) {
+                          return DownloadCoverImage(
+                            entry: pageInfo.entries.first,
+                            width: constraints.maxWidth,
+                            height: constraints.maxHeight,
+                          );
+                        }
+                        return NetworkImgLayer(
+                          src: pageInfo.cover,
+                          width: constraints.maxWidth,
+                          height: constraints.maxHeight,
+                        );
+                      },
                     ),
                   ),
                   PBadge(

@@ -130,6 +130,26 @@ class DownloadService extends GetxService {
     waitForInitialization = () async {
       await DownloadManager.init();
 
+      // 0. 同步当前存储目录设定（针对 SAF / SD卡）
+      final type = GStorage.setting.get(
+        SettingBoxKey.downloadDirType,
+        defaultValue: 0,
+      ) as int;
+      if (type == 2 && Platform.isAndroid) {
+        try {
+          final nativeSafUri = await DownloadManager.getCustomDirectoryUri();
+          if (nativeSafUri != null && nativeSafUri.isNotEmpty) {
+            downloadPath = nativeSafUri;
+            await GStorage.setting.put(SettingBoxKey.downloadPath, nativeSafUri);
+          }
+        } catch (_) {}
+      } else {
+        final savedPath = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+        if (savedPath != null && savedPath.isNotEmpty) {
+          downloadPath = savedPath;
+        }
+      }
+
       // 1. 优先扫描暂存目录（download_staging）中中断或未提交的任务，恢复至待下载队列
       try {
         final stagingBase = path.join(appSupportDirPath, 'download_staging');
@@ -145,37 +165,61 @@ class DownloadService extends GetxService {
       }
 
       // 2. 扫描并加载已下载完成的离线缓存列表
-      await _readDownloadList();
-
-      // 3. 关联 Aria 原生底层未完成任务进度
-      final unfinishedTasks = await DownloadManager.getUnfinishedTasks();
-      for (final task in unfinishedTasks) {
-        final filePath = task['filePath'] as String?;
-        if (filePath == null) continue;
-
-        final match = waitDownloadQueue.firstWhereOrNull((e) {
-          final typeTag = e.typeTag;
-          if (typeTag == null) return false;
-          final videoPath1 =
-              path.join(e.entryDirPath, typeTag, PathUtils.videoNameType1);
-          final videoPath2 =
-              path.join(e.entryDirPath, typeTag, PathUtils.videoNameType2);
-          final audioPath =
-              path.join(e.entryDirPath, typeTag, PathUtils.audioNameType2);
-          return filePath == videoPath1 ||
-              filePath == videoPath2 ||
-              filePath == audioPath;
-        });
-
-        if (match != null) {
-          match.status = DownloadStatus.pause;
-          match.downloadedBytes =
-              (task['currentProgress'] as num?)?.toInt() ?? match.downloadedBytes;
-        }
+      try {
+        await _readDownloadList();
+      } catch (e) {
+        if (kDebugMode) debugPrint('Failed to read download list: $e');
       }
+
+      // 3. 关联 Aria 原生底层未完成任务进度 (安全容错)
+      try {
+        final unfinishedTasks = await DownloadManager.getUnfinishedTasks();
+        for (final task in unfinishedTasks) {
+          final filePath = task['filePath'] as String?;
+          if (filePath == null) continue;
+
+          final match = waitDownloadQueue.firstWhereOrNull((e) {
+            final typeTag = e.typeTag;
+            if (typeTag == null) return false;
+            final videoPath1 =
+                path.join(e.entryDirPath, typeTag, PathUtils.videoNameType1);
+            final videoPath2 =
+                path.join(e.entryDirPath, typeTag, PathUtils.videoNameType2);
+            final audioPath =
+                path.join(e.entryDirPath, typeTag, PathUtils.audioNameType2);
+            return filePath == videoPath1 ||
+                filePath == videoPath2 ||
+                filePath == audioPath;
+          });
+
+          if (match != null) {
+            match.status = DownloadStatus.pause;
+            match.downloadedBytes =
+                (task['currentProgress'] as num?)?.toInt() ?? match.downloadedBytes;
+          }
+        }
+      } catch (e) {
+        if (kDebugMode) debugPrint('Failed to query unfinished tasks: $e');
+      }
+
       waitDownloadQueue.refresh();
       flagNotifier.refresh();
+
+      // 4. 后台自愈恢复（自动检索老旧/缺失元数据视频，不阻塞界面启动）
+      unawaited(_autoBackgroundScanAndHeal());
     }();
+  }
+
+  /// 后台自愈与静默加载引擎
+  Future<void> _autoBackgroundScanAndHeal() async {
+    try {
+      await deepScanRecovery();
+      await _readDownloadList();
+      waitDownloadQueue.refresh();
+      flagNotifier.refresh();
+    } catch (e) {
+      if (kDebugMode) debugPrint('Auto background scan error: $e');
+    }
   }
 
   /// 防 412 串行深度自愈：扫描磁盘恢复未录入的任务时，使用严格串行遍历，并在请求 B 站 API 前强制等待 600ms，彻底绕过 WAF 412 封禁
@@ -662,12 +706,29 @@ class DownloadService extends GetxService {
     return true;
   }
 
+  /// 获取本地应用沙盒内持久化封面文件路径（100% 权限安全）
+  static File getLocalCoverFile(BiliDownloadEntryInfo entry) {
+    final coversDir = Directory(path.join(appSupportDirPath, 'download_covers'));
+    if (!coversDir.existsSync()) {
+      try {
+        coversDir.createSync(recursive: true);
+      } catch (_) {}
+    }
+    return File(path.join(coversDir.path, '${entry.avid}_${entry.cid}.jpg'));
+  }
+
   Future<bool> _downloadCover({
     required BiliDownloadEntryInfo entry,
   }) async {
     try {
       final filePath = path.join(entry.entryDirPath, PathUtils.coverName);
+      final localFile = getLocalCoverFile(entry);
       if (File(filePath).existsSync()) {
+        if (!localFile.existsSync()) {
+          try {
+            await File(filePath).copy(localFile.path);
+          } catch (_) {}
+        }
         return true;
       }
       final file = (await CacheManager.manager.getFileFromCache(
@@ -675,8 +736,16 @@ class DownloadService extends GetxService {
       ))?.file;
       if (file != null) {
         await file.copy(filePath);
+        try {
+          await file.copy(localFile.path);
+        } catch (_) {}
       } else {
         await Request.dio.download(entry.cover, filePath);
+        try {
+          if (File(filePath).existsSync()) {
+            await File(filePath).copy(localFile.path);
+          }
+        } catch (_) {}
       }
       return true;
     } catch (_) {
@@ -1109,43 +1178,51 @@ class DownloadService extends GetxService {
     }
   }
 
+  bool _isScanning = false;
+
   /// 重新扫描存储目录并自动恢复离线视频
   Future<int> rescanStorageAndRecover() async {
-    final type = GStorage.setting.get(
-      SettingBoxKey.downloadDirType,
-      defaultValue: 0,
-    ) as int;
+    if (_isScanning) return downloadList.length;
+    _isScanning = true;
+    try {
+      final type = GStorage.setting.get(
+        SettingBoxKey.downloadDirType,
+        defaultValue: 0,
+      ) as int;
 
-    if (type == 2 && Platform.isAndroid) {
-      try {
-        final nativeSafUri = await DownloadManager.getCustomDirectoryUri();
-        if (nativeSafUri != null && nativeSafUri.isNotEmpty) {
-          downloadPath = nativeSafUri;
-          await GStorage.setting.put(SettingBoxKey.downloadPath, nativeSafUri);
+      if (type == 2 && Platform.isAndroid) {
+        try {
+          final nativeSafUri = await DownloadManager.getCustomDirectoryUri();
+          if (nativeSafUri != null && nativeSafUri.isNotEmpty) {
+            downloadPath = nativeSafUri;
+            await GStorage.setting.put(SettingBoxKey.downloadPath, nativeSafUri);
+          }
+        } catch (_) {}
+      } else {
+        final savedPath = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
+        if (savedPath != null && savedPath.isNotEmpty) {
+          downloadPath = savedPath;
         }
-      } catch (_) {}
-    } else {
-      final savedPath = GStorage.setting.get(SettingBoxKey.downloadPath) as String?;
-      if (savedPath != null && savedPath.isNotEmpty) {
-        downloadPath = savedPath;
       }
+
+      // 深度自愈缺失元数据的任务
+      await deepScanRecovery();
+
+      // 重新读取全部离线列表
+      await _readDownloadList();
+
+      // 扫描 staging 临时目录
+      final stagingBase = path.join(appSupportDirPath, 'download_staging');
+      if (Directory(stagingBase).existsSync()) {
+        await UniversalCacheRecoveryEngine.scanStagingEntries(stagingBase);
+      }
+
+      waitDownloadQueue.refresh();
+      flagNotifier.refresh();
+      return downloadList.length;
+    } finally {
+      _isScanning = false;
     }
-
-    // 深度自愈缺失元数据的任务
-    await deepScanRecovery();
-
-    // 重新读取全部离线列表
-    await _readDownloadList();
-
-    // 扫描 staging 临时目录
-    final stagingBase = path.join(appSupportDirPath, 'download_staging');
-    if (Directory(stagingBase).existsSync()) {
-      await UniversalCacheRecoveryEngine.scanStagingEntries(stagingBase);
-    }
-
-    waitDownloadQueue.refresh();
-    flagNotifier.refresh();
-    return downloadList.length;
   }
 
   Future<void> deletePage({

@@ -44,6 +44,15 @@ class _DownloadPageState extends State<DownloadPage>
   BaseMultiSelectMixin<DownloadSeasonInfo> get multiSelectCtr => _controller;
 
   @override
+  void initState() {
+    super.initState();
+    // 每次进入离线缓存界面时，自动在后台静默同步一次存储目录与自愈识别
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      downloadService.rescanStorageAndRecover();
+    });
+  }
+
+  @override
   void dispose() {
     _progress.dispose();
     super.dispose();
