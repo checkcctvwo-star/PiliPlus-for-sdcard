@@ -1,6 +1,7 @@
 import 'dart:io' show File;
 
 import 'package:PiliPlus/utils/path_utils.dart';
+import 'package:collection/collection.dart';
 import 'package:path/path.dart' as path;
 
 sealed class DataSource {
@@ -34,11 +35,14 @@ class FileSource extends DataSource {
   }) {
     if (safFileUris != null && safFileUris.isNotEmpty) {
       final mp4Uri = safFileUris[PathUtils.videoNameType1] ??
-          safFileUris['$typeTag/${PathUtils.videoNameType1}'];
+          safFileUris['$typeTag/${PathUtils.videoNameType1}'] ??
+          safFileUris.entries.firstWhereOrNull((e) => e.key.endsWith(PathUtils.videoNameType1))?.value;
       final videoM4sUri = safFileUris[PathUtils.videoNameType2] ??
-          safFileUris['$typeTag/${PathUtils.videoNameType2}'];
+          safFileUris['$typeTag/${PathUtils.videoNameType2}'] ??
+          safFileUris.entries.firstWhereOrNull((e) => e.key.endsWith(PathUtils.videoNameType2))?.value;
       final audioM4sUri = safFileUris[PathUtils.audioNameType2] ??
-          safFileUris['$typeTag/${PathUtils.audioNameType2}'];
+          safFileUris['$typeTag/${PathUtils.audioNameType2}'] ??
+          safFileUris.entries.firstWhereOrNull((e) => e.key.endsWith(PathUtils.audioNameType2))?.value;
 
       if (mp4Uri != null) {
         return FileSource._(

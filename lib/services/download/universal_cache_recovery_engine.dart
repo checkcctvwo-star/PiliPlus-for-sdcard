@@ -47,19 +47,15 @@ class UniversalCacheRecoveryEngine {
                 ..isCompleted = true
                 ..status = DownloadStatus.completed;
 
-              final resolvedPhysical = await DownloadManager.resolveContentUri(entryDirUri);
-              if (resolvedPhysical != null && resolvedPhysical.isNotEmpty) {
-                entry
-                  ..entryDirPath = resolvedPhysical
-                  ..pageDirPath = p.dirname(resolvedPhysical);
-              }
-
               entry.safFileUris = safMap;
               if (entryFileUri != null) {
                 entry.safFileUris![_entryFileName] = entryFileUri;
               }
               if (safMap.containsKey(_mp4FileName)) {
                 entry.mediaType = 1;
+              } else if (safMap.containsKey(_videoM4sFileName)) {
+                entry.mediaType = 2;
+                entry.hasDashAudio = safMap.containsKey(_audioM4sFileName);
               }
               recovered.add(entry);
             } else {
@@ -110,172 +106,172 @@ class UniversalCacheRecoveryEngine {
       } else {
         // ── POSIX 目录递归扫描（本机存储 & 外置 SD 卡）─────────────────────
         final rootDir = Directory(basePath);
-        if (!rootDir.existsSync()) {
-          return recovered;
-        }
+        if (rootDir.existsSync()) {
+          List<FileSystemEntity> pageEntities = const [];
+          try {
+            pageEntities = rootDir.listSync();
+          } catch (e) {
+            if (kDebugMode) debugPrint('Cannot list rootDir $basePath: $e');
+          }
 
-        final pageEntities = rootDir.listSync();
-        for (final pageEntity in pageEntities) {
-          if (pageEntity is! Directory) continue;
-          final pageDir = pageEntity;
+          for (final pageEntity in pageEntities) {
+            if (pageEntity is! Directory) continue;
+            final pageDir = pageEntity;
 
-          final entryEntities = pageDir.listSync();
-          for (final entryEntity in entryEntities) {
-            if (entryEntity is! Directory) continue;
-            final entryDir = entryEntity;
+            List<FileSystemEntity> entryEntities = const [];
+            try {
+              entryEntities = pageDir.listSync();
+            } catch (e) {
+              if (kDebugMode) debugPrint('Cannot list pageDir ${pageDir.path}: $e');
+              continue;
+            }
 
-            final entryFile = File(p.join(entryDir.path, _entryFileName));
-            if (entryFile.existsSync()) {
+            for (final entryEntity in entryEntities) {
+              if (entryEntity is! Directory) continue;
+              final entryDir = entryEntity;
+
               try {
-                final jsonStr = await entryFile.readAsString();
-                final jsonMap = jsonDecode(jsonStr) as Map<String, dynamic>;
-                final entry = BiliDownloadEntryInfo.fromLenientJson(jsonMap)
-                  ..pageDirPath = pageDir.path
-                  ..entryDirPath = entryDir.path;
+                final entryFile = File(p.join(entryDir.path, _entryFileName));
+                if (entryFile.existsSync()) {
+                  final jsonStr = await entryFile.readAsString();
+                  final jsonMap = jsonDecode(jsonStr) as Map<String, dynamic>;
+                  final entry = BiliDownloadEntryInfo.fromLenientJson(jsonMap)
+                    ..pageDirPath = pageDir.path
+                    ..entryDirPath = entryDir.path;
 
-                // 检查 0.mp4 是否已存在
-                final rootMp4 = File(p.join(entryDir.path, _mp4FileName));
-                final tag = entry.typeTag;
-                final tagMp4 = tag != null
-                    ? File(p.join(entryDir.path, tag, _mp4FileName))
-                    : null;
+                  // 检查 0.mp4 是否已存在
+                  final rootMp4 = File(p.join(entryDir.path, _mp4FileName));
+                  final tag = entry.typeTag;
+                  final tagMp4 = tag != null
+                      ? File(p.join(entryDir.path, tag, _mp4FileName))
+                      : null;
 
-                if (rootMp4.existsSync()) {
-                  entry
-                    ..isCompleted = true
-                    ..mediaType = 1
-                    ..totalBytes = rootMp4.lengthSync()
-                    ..downloadedBytes = rootMp4.lengthSync()
-                    ..status = DownloadStatus.completed;
-                } else if (tagMp4 != null && tagMp4.existsSync()) {
-                  entry
-                    ..isCompleted = true
-                    ..mediaType = 1
-                    ..totalBytes = tagMp4.lengthSync()
-                    ..downloadedBytes = tagMp4.lengthSync()
-                    ..status = DownloadStatus.completed;
-                } else {
-                  // 尝试检测遗留的未混流 .m4s 切片并自愈转码
-                  if (tag != null) {
+                  if (rootMp4.existsSync()) {
+                    final len = rootMp4.lengthSync();
+                    entry
+                      ..isCompleted = true
+                      ..mediaType = 1
+                      ..totalBytes = len
+                      ..downloadedBytes = len
+                      ..status = DownloadStatus.completed;
+                  } else if (tagMp4 != null && tagMp4.existsSync()) {
+                    final len = tagMp4.lengthSync();
+                    entry
+                      ..isCompleted = true
+                      ..mediaType = 1
+                      ..totalBytes = len
+                      ..downloadedBytes = len
+                      ..status = DownloadStatus.completed;
+                  } else if (tag != null) {
                     final videoM4s = File(p.join(entryDir.path, tag, _videoM4sFileName));
                     final audioM4s = File(p.join(entryDir.path, tag, _audioM4sFileName));
                     if (videoM4s.existsSync()) {
-                      bool muxSuccess = false;
-                      if (audioM4s.existsSync()) {
-                        final targetMp4 = p.join(entryDir.path, tag, _mp4FileName);
-                        muxSuccess = await DownloadManager.mergeDashMedia(
-                          videoPath: videoM4s.path,
-                          audioPath: audioM4s.path,
-                          outputPath: targetMp4,
-                        );
-                        if (muxSuccess && File(targetMp4).existsSync()) {
-                          final len = File(targetMp4).lengthSync();
-                          entry
-                            ..isCompleted = true
-                            ..mediaType = 1
-                            ..totalBytes = len
-                            ..downloadedBytes = len
-                            ..status = DownloadStatus.completed;
-                          // 更新持久化 entry.json
-                          await _saveEntryJson(entryFile, entry);
+                      final totalM4sBytes = videoM4s.lengthSync() +
+                          (audioM4s.existsSync() ? audioM4s.lengthSync() : 0);
+                      entry
+                        ..isCompleted = true
+                        ..mediaType = 2
+                        ..hasDashAudio = audioM4s.existsSync()
+                        ..totalBytes = totalM4sBytes
+                        ..downloadedBytes = totalM4sBytes
+                        ..status = DownloadStatus.completed;
+                    }
+                  }
+
+                  recovered.add(entry);
+                } else {
+                  // 无 entry.json 但存在媒体文件：离线逆向合成
+                  File? foundMp4;
+                  File? foundVideoM4s;
+                  File? foundAudioM4s;
+                  final directMp4 = File(p.join(entryDir.path, _mp4FileName));
+                  if (directMp4.existsSync()) {
+                    foundMp4 = directMp4;
+                  } else {
+                    List<FileSystemEntity> subs = const [];
+                    try {
+                      subs = entryDir.listSync();
+                    } catch (_) {}
+                    for (final sub in subs) {
+                      if (sub is Directory) {
+                        final subMp4 = File(p.join(sub.path, _mp4FileName));
+                        if (subMp4.existsSync()) {
+                          foundMp4 = subMp4;
+                          break;
+                        }
+                        final vM4s = File(p.join(sub.path, _videoM4sFileName));
+                        if (vM4s.existsSync()) {
+                          foundVideoM4s = vM4s;
+                          final aM4s = File(p.join(sub.path, _audioM4sFileName));
+                          if (aM4s.existsSync()) foundAudioM4s = aM4s;
+                          break;
                         }
                       }
-                      if (!muxSuccess) {
-                        // 混流未执行或失败：安全标记为 DASH 切片任务，确保可以通过双轨播放，绝不黑屏
-                        final totalM4sBytes = videoM4s.lengthSync() +
-                            (audioM4s.existsSync() ? audioM4s.lengthSync() : 0);
-                        entry
-                          ..isCompleted = true
-                          ..mediaType = 2
-                          ..hasDashAudio = audioM4s.existsSync()
-                          ..totalBytes = totalM4sBytes
-                          ..downloadedBytes = totalM4sBytes
-                          ..status = DownloadStatus.completed;
-                        await _saveEntryJson(entryFile, entry);
-                      }
                     }
                   }
-                }
 
-                recovered.add(entry);
+                  if (foundMp4 != null || foundVideoM4s != null) {
+                    final pageName = p.basename(pageDir.path);
+                    final entryName = p.basename(entryDir.path);
+                    final avid = int.tryParse(pageName.replaceAll(RegExp(r'\D'), '')) ?? 0;
+                    final cid = int.tryParse(entryName.replaceAll(RegExp(r'\D'), '')) ?? 0;
+                    final fileLen = foundMp4?.lengthSync() ??
+                        (foundVideoM4s!.lengthSync() + (foundAudioM4s?.lengthSync() ?? 0));
+                    final isSingleMp4 = foundMp4 != null;
+
+                    final synthetic = BiliDownloadEntryInfo(
+                      mediaType: isSingleMp4 ? 1 : 2,
+                      hasDashAudio: !isSingleMp4 && foundAudioM4s != null,
+                      isCompleted: true,
+                      totalBytes: fileLen,
+                      downloadedBytes: fileLen,
+                      title: pageName,
+                      cover: '',
+                      preferedVideoQuality: 80,
+                      qualityPithyDescription: '高清',
+                      guessedTotalBytes: fileLen,
+                      totalTimeMilli: 0,
+                      danmakuCount: 0,
+                      timeUpdateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                      timeCreateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
+                      canPlayInAdvance: true,
+                      interruptTransformTempFile: false,
+                      avid: avid,
+                      bvid: '',
+                      pageData: PageInfo(
+                        cid: cid,
+                        page: 1,
+                        hasAlias: false,
+                        tid: 0,
+                        part: entryName,
+                        downloadTitle: '视频已缓存完成',
+                        downloadSubtitle: pageName,
+                      ),
+                    )
+                      ..pageDirPath = pageDir.path
+                      ..entryDirPath = entryDir.path
+                      ..status = DownloadStatus.completed;
+
+                    await _saveEntryJson(entryFile, synthetic);
+                    recovered.add(synthetic);
+                  }
+                }
               } catch (e) {
-                if (kDebugMode) debugPrint('POSIX entry.json parse error: $e');
-              }
-            } else {
-              // 无 entry.json 但存在媒体文件：离线逆向合成
-              File? foundMp4;
-              File? foundVideoM4s;
-              File? foundAudioM4s;
-              final directMp4 = File(p.join(entryDir.path, _mp4FileName));
-              if (directMp4.existsSync()) {
-                foundMp4 = directMp4;
-              } else {
-                for (final sub in entryDir.listSync()) {
-                  if (sub is Directory) {
-                    final subMp4 = File(p.join(sub.path, _mp4FileName));
-                    if (subMp4.existsSync()) {
-                      foundMp4 = subMp4;
-                      break;
-                    }
-                    final vM4s = File(p.join(sub.path, _videoM4sFileName));
-                    if (vM4s.existsSync()) {
-                      foundVideoM4s = vM4s;
-                      final aM4s = File(p.join(sub.path, _audioM4sFileName));
-                      if (aM4s.existsSync()) foundAudioM4s = aM4s;
-                      break;
-                    }
-                  }
-                }
-              }
-
-              if (foundMp4 != null || foundVideoM4s != null) {
-                final pageName = p.basename(pageDir.path);
-                final entryName = p.basename(entryDir.path);
-                final avid = int.tryParse(pageName.replaceAll(RegExp(r'\D'), '')) ?? 0;
-                final cid = int.tryParse(entryName.replaceAll(RegExp(r'\D'), '')) ?? 0;
-                final fileLen = foundMp4?.lengthSync() ??
-                    (foundVideoM4s!.lengthSync() + (foundAudioM4s?.lengthSync() ?? 0));
-                final isSingleMp4 = foundMp4 != null;
-
-                final synthetic = BiliDownloadEntryInfo(
-                  mediaType: isSingleMp4 ? 1 : 2,
-                  hasDashAudio: !isSingleMp4 && foundAudioM4s != null,
-                  isCompleted: true,
-                  totalBytes: fileLen,
-                  downloadedBytes: fileLen,
-                  title: pageName,
-                  cover: '',
-                  preferedVideoQuality: 80,
-                  qualityPithyDescription: '高清',
-                  guessedTotalBytes: fileLen,
-                  totalTimeMilli: 0,
-                  danmakuCount: 0,
-                  timeUpdateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                  timeCreateStamp: DateTime.now().millisecondsSinceEpoch ~/ 1000,
-                  canPlayInAdvance: true,
-                  interruptTransformTempFile: false,
-                  avid: avid,
-                  bvid: '',
-                  pageData: PageInfo(
-                    cid: cid,
-                    page: 1,
-                    hasAlias: false,
-                    tid: 0,
-                    part: entryName,
-                    downloadTitle: '视频已缓存完成',
-                    downloadSubtitle: pageName,
-                  ),
-                )
-                  ..pageDirPath = pageDir.path
-                  ..entryDirPath = entryDir.path
-                  ..status = DownloadStatus.completed;
-
-                // 补全持久化 entry.json 保证下次启动秒开
-                await _saveEntryJson(entryFile, synthetic);
-                recovered.add(synthetic);
+                if (kDebugMode) debugPrint('Entry parse/recovery error in ${entryDir.path}: $e');
               }
             }
           }
+        }
+
+        // 弹性双轨熔断：如果 POSIX 扫描未找到任何结果，但平台是 Android，尝试从原生 SAF 检索自愈
+        if (recovered.isEmpty && Platform.isAndroid) {
+          try {
+            final safUri = await DownloadManager.getCustomDirectoryUri();
+            if (safUri != null && safUri.isNotEmpty && safUri != basePath) {
+              final safRecovered = await scanAndRecoverAll(basePath: safUri, dirType: 2);
+              recovered.addAll(safRecovered);
+            }
+          } catch (_) {}
         }
       }
     } catch (e) {

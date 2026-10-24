@@ -384,16 +384,23 @@ class DownloadService extends GetxService {
                     path.join(typeDir.path, PathUtils.videoNameType1),
                   );
 
+                  final rootMp4File = File(
+                    path.join(cDir.path, PathUtils.videoNameType1),
+                  );
+
                   int actualBytes = 0;
                   if (videoFile.existsSync()) actualBytes += videoFile.lengthSync();
                   if (audioFile.existsSync()) actualBytes += audioFile.lengthSync();
                   if (type1File.existsSync()) actualBytes += type1File.lengthSync();
+                  if (rootMp4File.existsSync()) actualBytes += rootMp4File.lengthSync();
 
-                  if (entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
+                  if (actualBytes > 0 && entry.totalBytes > 0 && actualBytes >= entry.totalBytes) {
                     entry
-                      ..isCompleted = false
-                      ..status = DownloadStatus.wait;
+                      ..isCompleted = true
+                      ..status = DownloadStatus.completed;
                     await _updateBiliDownloadEntryJson(entry);
+                  } else if (!entry.isCompleted && entry.totalBytes > 0 && actualBytes < entry.totalBytes) {
+                    entry.status = DownloadStatus.wait;
                     tempWaitQueue.add(entry);
                   }
                 }
@@ -1053,17 +1060,9 @@ class DownloadService extends GetxService {
         if (safUris != null && safUris.isNotEmpty) {
           entry.safFileUris = safUris;
         }
-        final resolvedTargetBase = await DownloadManager.resolveContentUri(downloadPath);
-        if (resolvedTargetBase != null && resolvedTargetBase.isNotEmpty) {
-          entry
-            ..pageDirPath = path.join(resolvedTargetBase, dirName)
-            ..entryDirPath = path.join(resolvedTargetBase, dirName, pageDirName);
-          await _updateBiliDownloadEntryJson(entry);
-        } else {
-          entry
-            ..pageDirPath = downloadPath
-            ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
-        }
+        entry
+          ..pageDirPath = downloadPath
+          ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
       }
     }
 

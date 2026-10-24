@@ -329,7 +329,17 @@ class MainActivity : AudioServiceActivity() {
                 }
                 "getCustomDirectoryUri" -> {
                     val prefs = getSharedPreferences("download_prefs", Context.MODE_PRIVATE)
-                    val uriString = prefs.getString("custom_saf_uri", null)
+                    var uriString = prefs.getString("custom_saf_uri", null)
+                    if (uriString == null) {
+                        try {
+                            val persisted = contentResolver.persistedUriPermissions
+                            val match = persisted.firstOrNull { it.isReadPermission && it.isWritePermission } ?: persisted.firstOrNull()
+                            if (match != null) {
+                                uriString = match.uri.toString()
+                                prefs.edit().putString("custom_saf_uri", uriString).apply()
+                            }
+                        } catch (_: Exception) {}
+                    }
                     result.success(uriString)
                 }
                 "clearCustomDirectory" -> {

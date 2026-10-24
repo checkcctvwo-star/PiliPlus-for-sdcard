@@ -62,15 +62,9 @@ object SafStorageBridge {
 
             outStream.use { os ->
                 FileInputStream(srcFile).use { input ->
-                    input.copyTo(os, bufferSize = 256 * 1024)
+                    input.copyTo(os, bufferSize = 512 * 1024)
                     os.flush()
                 }
-            }
-
-            // Verify written size
-            if (targetDoc.length() == 0L && srcFile.length() > 0L) {
-                targetDoc.delete()
-                return@withContext Result.failure(IOException("SAF file write resulted in 0 bytes for $fileName"))
             }
 
             // Cleanup local staging file
@@ -213,60 +207,86 @@ object SafStorageBridge {
 
         try {
             // First level: avid, s_seasonId, etc.
-            val pageDirs = root.listFiles().filter { it.isDirectory }
+            val pageDirs = try {
+                root.listFiles().filter { it.isDirectory }
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to list root directories in SAF: $treeUriString", e)
+                emptyList()
+            }
+
             for (pageDir in pageDirs) {
-                val pageDirName = pageDir.name ?: continue
-                // Second level: c_cid, epId, etc.
-                val entryDirs = pageDir.listFiles().filter { it.isDirectory }
-                for (entryDir in entryDirs) {
-                    val entryDirName = entryDir.name ?: continue
-                    val safFileUris = mutableMapOf<String, String>()
-
-                    // Collect all files in entryDir and its subdirectories (such as 80/0.mp4)
-                    fun collectUris(dir: DocumentFile, prefix: String = "") {
-                        for (file in dir.listFiles()) {
-                            val relName = if (prefix.isEmpty()) file.name.orEmpty() else "$prefix/${file.name}"
-                            if (file.isFile) {
-                                safFileUris[relName] = file.uri.toString()
-                                val baseName = file.name.orEmpty()
-                                if (baseName == "0.mp4") safFileUris["0.mp4"] = file.uri.toString()
-                                if (baseName == "video.m4s") safFileUris["video.m4s"] = file.uri.toString()
-                                if (baseName == "audio.m4s") safFileUris["audio.m4s"] = file.uri.toString()
-                                if (baseName == "entry.json") safFileUris["entry.json"] = file.uri.toString()
-                                if (baseName == "cover.jpg") safFileUris["cover.jpg"] = file.uri.toString()
-                                if (baseName == "danmaku.pb") safFileUris["danmaku.pb"] = file.uri.toString()
-                            } else if (file.isDirectory) {
-                                collectUris(file, file.name.orEmpty())
-                            }
-                        }
+                try {
+                    val pageDirName = pageDir.name ?: continue
+                    // Second level: c_cid, epId, etc.
+                    val entryDirs = try {
+                        pageDir.listFiles().filter { it.isDirectory }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed to list entry dirs in $pageDirName", e)
+                        emptyList()
                     }
-                    collectUris(entryDir)
 
-                    val entryFileUri = safFileUris["entry.json"]
-                    var jsonStr: String? = null
-                    if (entryFileUri != null) {
+                    for (entryDir in entryDirs) {
                         try {
-                            context.contentResolver.openInputStream(Uri.parse(entryFileUri))?.use { stream ->
-                                jsonStr = stream.bufferedReader().use { it.readText() }
+                            val entryDirName = entryDir.name ?: continue
+                            val safFileUris = mutableMapOf<String, String>()
+
+                            // Collect all files in entryDir and its subdirectories (such as 80/0.mp4)
+                            fun collectUris(dir: DocumentFile, prefix: String = "") {
+                                val files = try {
+                                    dir.listFiles()
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed to list files in ${dir.name}", e)
+                                    emptyArray()
+                                }
+                                for (file in files) {
+                                    val relName = if (prefix.isEmpty()) file.name.orEmpty() else "$prefix/${file.name}"
+                                    if (file.isFile) {
+                                        safFileUris[relName] = file.uri.toString()
+                                        val baseName = file.name.orEmpty()
+                                        if (baseName == "0.mp4") safFileUris["0.mp4"] = file.uri.toString()
+                                        if (baseName == "video.m4s") safFileUris["video.m4s"] = file.uri.toString()
+                                        if (baseName == "audio.m4s") safFileUris["audio.m4s"] = file.uri.toString()
+                                        if (baseName == "entry.json") safFileUris["entry.json"] = file.uri.toString()
+                                        if (baseName == "cover.jpg") safFileUris["cover.jpg"] = file.uri.toString()
+                                        if (baseName == "danmaku.pb") safFileUris["danmaku.pb"] = file.uri.toString()
+                                    } else if (file.isDirectory) {
+                                        collectUris(file, file.name.orEmpty())
+                                    }
+                                }
+                            }
+                            collectUris(entryDir)
+
+                            val entryFileUri = safFileUris["entry.json"]
+                            var jsonStr: String? = null
+                            if (entryFileUri != null) {
+                                try {
+                                    context.contentResolver.openInputStream(Uri.parse(entryFileUri))?.use { stream ->
+                                        jsonStr = stream.bufferedReader().use { it.readText() }
+                                    }
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed to read entry.json in SAF $entryDirName", e)
+                                }
+                            }
+
+                            if (jsonStr != null || safFileUris.containsKey("0.mp4") || safFileUris.containsKey("video.m4s")) {
+                                entryList.add(
+                                    mapOf(
+                                        "json" to jsonStr,
+                                        "pageDirName" to pageDirName,
+                                        "entryDirName" to entryDirName,
+                                        "entryFileUri" to entryFileUri,
+                                        "entryDirUri" to entryDir.uri.toString(),
+                                        "pageDirUri" to pageDir.uri.toString(),
+                                        "safFileUris" to safFileUris
+                                    )
+                                )
                             }
                         } catch (e: Exception) {
-                            Log.w(TAG, "Failed to read entry.json in SAF $entryDirName", e)
+                            Log.w(TAG, "Error parsing entry directory in SAF", e)
                         }
                     }
-
-                    if (jsonStr != null || safFileUris.containsKey("0.mp4") || safFileUris.containsKey("video.m4s")) {
-                        entryList.add(
-                            mapOf(
-                                "json" to jsonStr,
-                                "pageDirName" to pageDirName,
-                                "entryDirName" to entryDirName,
-                                "entryFileUri" to entryFileUri,
-                                "entryDirUri" to entryDir.uri.toString(),
-                                "pageDirUri" to pageDir.uri.toString(),
-                                "safFileUris" to safFileUris
-                            )
-                        )
-                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Error processing page directory in SAF", e)
                 }
             }
         } catch (e: Exception) {

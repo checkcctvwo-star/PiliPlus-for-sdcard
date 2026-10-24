@@ -60,7 +60,7 @@ object MediaMuxerBridge {
                         "-c", "copy",
                         "-avoid_negative_ts", "make_zero",
                         "-max_interleave_delta", "0",
-                        "-shortest", "-strict", "unofficial", "-movflags", "+faststart",
+                        "-shortest", "-strict", "unofficial",
                         "-f", "mp4",
                         tempOutputPath
                     )
@@ -84,7 +84,7 @@ object MediaMuxerBridge {
                         "-c:v", "copy", "-c:a", "aac", "-b:a", "192k", "-ar", "48000",
                         "-avoid_negative_ts", "make_zero",
                         "-max_interleave_delta", "0",
-                        "-shortest", "-strict", "unofficial", "-movflags", "+faststart",
+                        "-shortest", "-strict", "unofficial",
                         "-f", "mp4",
                         tempOutputPath
                     )
@@ -103,7 +103,7 @@ object MediaMuxerBridge {
                             "-map", "0:v?", "-map", "1:a?",
                             "-c:v", "copy", "-c:a", "aac", "-b:a", "192k",
                             "-avoid_negative_ts", "make_zero",
-                            "-shortest", "-strict", "unofficial", "-movflags", "+faststart",
+                            "-shortest", "-strict", "unofficial",
                             "-f", "mp4",
                             tempOutputPath
                         )

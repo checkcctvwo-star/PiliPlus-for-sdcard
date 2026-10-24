@@ -50,11 +50,11 @@ class BiliDownloadEntryInfo with MultiSelectData {
   late String entryDirPath;
   late DownloadStatus status = .wait;
 
-  int get cid => source?.cid ?? pageData!.cid;
+  int get cid => source?.cid ?? pageData?.cid ?? ep?.episodeId ?? 0;
 
   String get pageId => seasonId ?? avid.toString();
 
-  int get sortKey => ep?.sortIndex ?? pageData!.page;
+  int get sortKey => ep?.sortIndex ?? pageData?.page ?? 1;
 
   String get showTitle {
     if (pageData case PageInfo(:final part)) {

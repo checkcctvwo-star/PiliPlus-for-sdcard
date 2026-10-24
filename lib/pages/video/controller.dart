@@ -384,10 +384,11 @@ class VideoDetailController extends GetxController
         final mp4InTag = path.join(dirPath, typeTag, PathUtils.videoNameType1);
         final videoM4s = path.join(dirPath, typeTag, PathUtils.videoNameType2);
 
-        if (File(mp4InRoot).existsSync() ||
+        if (dirPath.startsWith('content://') ||
+            (localEntry.safFileUris != null && localEntry.safFileUris!.isNotEmpty) ||
+            File(mp4InRoot).existsSync() ||
             File(mp4InTag).existsSync() ||
-            File(videoM4s).existsSync() ||
-            (dirPath.startsWith('content://') && localEntry.safFileUris != null)) {
+            File(videoM4s).existsSync()) {
           initFileSource(localEntry);
           isFileSource = true;
           args['sourceType'] = SourceType.file;
@@ -778,7 +779,11 @@ class VideoDetailController extends GetxController
       if (dir.startsWith('content://')) {
         final resolved = await DownloadManager.resolveContentUri(dir);
         if (resolved != null && resolved.isNotEmpty) {
-          args['dirPath'] = resolved;
+          // 仅在真实物理路径可直接被 POSIX 访问时替换，防止外置 SD 卡受限抛出 Permission Denied
+          final testFile = File(path.join(resolved, PathUtils.videoNameType1));
+          if (testFile.existsSync()) {
+            args['dirPath'] = resolved;
+          }
         }
       }
     }
