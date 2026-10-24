@@ -64,7 +64,7 @@ class _DownloadCoverImageState extends State<DownloadCoverImage> {
 
   void _checkAndLoadSafBytesIfNeeded() {
     final localSandbox = DownloadService.getLocalCoverFile(widget.entry);
-    if (!localSandbox.existsSync() && widget.entry.cover.isEmpty) {
+    if (!localSandbox.existsSync()) {
       _loadSafBytes();
     }
   }
@@ -98,6 +98,8 @@ class _DownloadCoverImageState extends State<DownloadCoverImage> {
   }
 
   Widget _buildFallback(BuildContext context) {
+    _loadSafBytes();
+
     if (widget.entry.cover.isNotEmpty && widget.entry.cover.startsWith('http')) {
       return NetworkImgLayer(
         src: widget.entry.cover,
@@ -108,8 +110,6 @@ class _DownloadCoverImageState extends State<DownloadCoverImage> {
         cacheWidth: widget.entry.pageData?.cacheWidth,
       );
     }
-
-    _loadSafBytes();
 
     return Container(
       width: widget.width,

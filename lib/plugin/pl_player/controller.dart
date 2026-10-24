@@ -833,7 +833,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
               .toString(),
       'demuxer-lavf-o':
-          'protocol_whitelist="file,http,https,tcp,tls,crypto,data,concat,subfile,fd,content,pipe,edl"',
+          'protocol_whitelist="file,http,https,tcp,tls,crypto,data,concat,subfile,fd,fdclose,content,pipe,edl"',
     };
     final autosync = Pref.autosync;
     if (autosync != '0') {
@@ -1198,8 +1198,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   Future<void> seek(Duration position, {bool isSeek = false}) async {
-    if (isSeek) {
-      /// 拖动进度条调节时，不等待第一帧，防止抖动
+    if (isSeek && !isFileSource) {
+      /// 拖动进度条调节时，不等待第一帧，防止抖动（本地文件直接 seek，无需等待网络缓冲）
       await _videoPlayerController?.stream.buffer.first;
     }
     danmakuController?.clear();

@@ -78,7 +78,7 @@ android {
             )
         }
         debug {
-            applicationIdSuffix = ".debug"
+            // Remove applicationIdSuffix so debug APK uses identical package name com.example.piliplus.sd
         }
     }
 

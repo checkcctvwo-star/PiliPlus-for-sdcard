@@ -56,9 +56,16 @@ object SafStorageBridge {
             ?: return@withContext Result.failure(IOException("Failed to create SAF document for $fileName"))
 
         try {
-            val outStream = context.contentResolver.openOutputStream(targetDoc.uri, "wt")
-                ?: context.contentResolver.openOutputStream(targetDoc.uri)
-                ?: return@withContext Result.failure(IOException("Failed to open SAF output stream for ${targetDoc.uri}"))
+            val outStream = try {
+                context.contentResolver.openOutputStream(targetDoc.uri, "rwt")
+                    ?: context.contentResolver.openOutputStream(targetDoc.uri, "w")
+            } catch (e: Exception) {
+                try {
+                    context.contentResolver.openOutputStream(targetDoc.uri, "w")
+                } catch (e2: Exception) {
+                    context.contentResolver.openOutputStream(targetDoc.uri)
+                }
+            } ?: return@withContext Result.failure(IOException("Failed to open SAF output stream for ${targetDoc.uri}"))
 
             outStream.use { os ->
                 FileInputStream(srcFile).use { input ->
