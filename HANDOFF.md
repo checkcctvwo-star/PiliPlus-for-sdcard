@@ -1,8 +1,8 @@
-# PiliPlus for SDCard - 智能体交接与测试验证全景指南 (Handoff V6)
+# PiliPlus for SDCard - 智能体交接与测试验证全景指南 (Handoff V7)
 
 > **文档状态**: 生产级测试与交接规约 (Ready for Production / Verified on HarmonyOS 4.2)  
 > **更新时间**: 2026-10-24  
-> **目标版本**: PiliPlus SD `v2.1.10+9` (Release `v2.1.10-sd-20261024-1145`)  
+> **目标版本**: PiliPlus SD `v2.1.11+10`  
 > **应用信息**: 包名 `com.example.piliplus.sd` / 应用名 `PiliPlus SD` (固定 Debug 签名，支持直接覆盖升级)  
 > **基准上游**: PiliPlus v2.1.6.2  
 > **测试对象**: 华为 MatePad 10.8 (SCMR-W09, HarmonyOS 4.2 API 31)、AI 智能体及后续开发者
