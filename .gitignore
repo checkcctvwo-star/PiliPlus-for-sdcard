@@ -153,3 +153,5 @@ test*
 
 # Local research and tools
 tools/tool_adb.py
+install_and_resume.py
+test_stress_offline.py
