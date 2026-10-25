@@ -255,6 +255,7 @@ class DownloadManager {
   DownloadStatus _status = DownloadStatus.downloading;
 
   DownloadStatus get status => _status;
+  set status(DownloadStatus val) => _status = val;
   final _cancelToken = CancelToken();
   late Future<void> task;
 
