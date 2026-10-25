@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert' show jsonDecode, jsonEncode;
 import 'dart:io' show Directory, File, Platform;
+import 'dart:math' show min;
 
 import 'package:PiliPlus/grpc/dm.dart';
 import 'package:PiliPlus/http/download.dart';
@@ -30,7 +31,6 @@ import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:collection/collection.dart';
 import 'package:flutter/foundation.dart'
     show kDebugMode, debugPrint, VoidCallback;
-import 'package:flutter_smart_dialog/flutter_smart_dialog.dart';
 import 'package:get/get.dart';
 import 'package:path/path.dart' as path;
 import 'package:synchronized/synchronized.dart';
@@ -679,7 +679,7 @@ class DownloadService extends GetxService {
     bool isUpdate = false,
   }) async {
     final cid = entry.pageData?.cid ?? entry.source?.cid;
-    if (cid == null) return false;
+    if (cid == null) return true;
     final danmakuFile = File(
       path.join(entry.entryDirPath, PathUtils.danmakuName),
     );
@@ -688,35 +688,39 @@ class DownloadService extends GetxService {
         if (!isUpdate) {
           _updateCurStatus(DownloadStatus.getDanmaku);
         }
-        final seg = (entry.totalTimeMilli / DmUtils.segLength).ceil();
-        if (seg <= 0) {
-          throw StateError('Invalid danmaku segment count: $seg');
-        }
+        await () async {
+          final seg = (entry.totalTimeMilli / DmUtils.segLength).ceil();
+          if (seg <= 0) return;
 
-        final danmaku = (await DmGrpc.dmSegMobile(
-          cid: cid,
-          segmentIndex: 1,
-        )).data;
-        for (var start = 2; start <= seg; start += _maxDanmakuConcurrency) {
-          final end = start + _maxDanmakuConcurrency - 1;
-          final responses = await Future.wait([
-            for (var index = start; index <= seg && index <= end; index++)
-              DmGrpc.dmSegMobile(cid: cid, segmentIndex: index),
-          ]);
-          for (final response in responses) {
-            danmaku.elems.addAll(response.data.elems);
+          final danmaku = (await DmGrpc.dmSegMobile(
+            cid: cid,
+            segmentIndex: 1,
+          )).data;
+          // 限制最多拉取前 5 段核心弹幕，避免超长视频卡在数十个切片请求上
+          final maxSeg = min(5, seg);
+          for (var start = 2; start <= maxSeg; start += _maxDanmakuConcurrency) {
+            final end = start + _maxDanmakuConcurrency - 1;
+            final responses = await Future.wait([
+              for (var index = start; index <= maxSeg && index <= end; index++)
+                DmGrpc.dmSegMobile(cid: cid, segmentIndex: index),
+            ]);
+            for (final response in responses) {
+              danmaku.elems.addAll(response.data.elems);
+            }
+            responses.clear();
           }
-          responses.clear();
-        }
-        await danmakuFile.writeAsBytes(danmaku.writeToBuffer());
+          await danmakuFile.writeAsBytes(danmaku.writeToBuffer());
+        }().timeout(const Duration(seconds: 8));
 
         return true;
       } catch (e) {
         if (!isUpdate) {
           _updateCurStatus(DownloadStatus.failDanmaku);
         }
-        if (kDebugMode) SmartDialog.showToast(e.toString());
-        return false;
+        if (kDebugMode) {
+          debugPrint('Danmaku download non-blocking warning: $e');
+        }
+        return true; // 弹幕下载失败或超时绝不阻断核心视频下载流水线
       }
     }
     return true;
@@ -821,8 +825,10 @@ class DownloadService extends GetxService {
 
   Future<void> _startDownload(BiliDownloadEntryInfo entry) async {
     try {
-      if (!await downloadDanmaku(entry: entry)) {
-        return;
+      try {
+        await downloadDanmaku(entry: entry);
+      } catch (e) {
+        if (kDebugMode) debugPrint('Danmaku download skipped: $e');
       }
 
       // ugc segments

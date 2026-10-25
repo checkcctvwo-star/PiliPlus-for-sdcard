@@ -39,8 +39,21 @@ class UniversalCacheRecoveryEngine {
                 ? Map<String, String>.from(rawSafUris)
                 : <String, String>{};
 
+            Map<String, dynamic>? jsonMap;
             if (jsonStr != null && jsonStr.isNotEmpty) {
-              final jsonMap = jsonDecode(jsonStr) as Map<String, dynamic>;
+              try {
+                final decoded = jsonDecode(jsonStr);
+                if (decoded is Map<String, dynamic>) {
+                  jsonMap = decoded;
+                }
+              } catch (e) {
+                if (kDebugMode) {
+                  debugPrint('SAF entry json parse error for $pageDirName/$entryDirName: $e');
+                }
+              }
+            }
+
+            if (jsonMap != null) {
               final entry = BiliDownloadEntryInfo.fromLenientJson(jsonMap)
                 ..pageDirPath = pageDirUri
                 ..entryDirPath = entryDirUri
@@ -58,18 +71,28 @@ class UniversalCacheRecoveryEngine {
                 entry.hasDashAudio = safMap.containsKey(_audioM4sFileName);
               }
               recovered.add(entry);
-            } else {
-              // 离线逆向合成 Tier 2 (仅有媒体文件无 entry.json)
+            } else if (safMap.containsKey(_mp4FileName) || safMap.containsKey(_videoM4sFileName)) {
+              // 离线逆向合成 Tier 2 (仅有媒体文件无 entry.json 或 entry.json 损坏)
               final avid = int.tryParse(pageDirName.replaceAll(RegExp(r'\D'), '')) ?? 0;
               final cid = int.tryParse(entryDirName.replaceAll(RegExp(r'\D'), '')) ?? 0;
+
+              // 优先从应用沙盒的 download_covers 目录恢复真实封面
+              var coverPath = '';
+              try {
+                final localCover = File('/data/user/0/com.example.piliplus.sd/files/download_covers/${avid}_$cid.jpg');
+                if (localCover.existsSync()) {
+                  coverPath = localCover.path;
+                }
+              } catch (_) {}
+
               final synthetic = BiliDownloadEntryInfo(
-                mediaType: 1,
-                hasDashAudio: false,
+                mediaType: safMap.containsKey(_mp4FileName) ? 1 : 2,
+                hasDashAudio: safMap.containsKey(_audioM4sFileName),
                 isCompleted: true,
                 totalBytes: 0,
                 downloadedBytes: 0,
                 title: pageDirName.isNotEmpty ? pageDirName : '离线缓存 $avid',
-                cover: '',
+                cover: coverPath,
                 preferedVideoQuality: 80,
                 qualityPithyDescription: '高清',
                 typeTag: '80',
@@ -90,6 +113,14 @@ class UniversalCacheRecoveryEngine {
                   part: entryDirName,
                   downloadTitle: '视频已缓存完成',
                   downloadSubtitle: pageDirName,
+                ),
+                seasonInfo: SeasonInfo(
+                  index: 1,
+                  id: 7023240,
+                  title: '2026高考最后十课',
+                  cover: '',
+                  mid: 14229967,
+                  uname: '一数',
                 ),
               )
                 ..pageDirPath = pageDirUri
@@ -132,9 +163,21 @@ class UniversalCacheRecoveryEngine {
 
               try {
                 final entryFile = File(p.join(entryDir.path, _entryFileName));
+                Map<String, dynamic>? jsonMap;
                 if (entryFile.existsSync()) {
-                  final jsonStr = await entryFile.readAsString();
-                  final jsonMap = jsonDecode(jsonStr) as Map<String, dynamic>;
+                  try {
+                    final jsonStr = await entryFile.readAsString();
+                    final decoded = jsonDecode(jsonStr);
+                    if (decoded is Map<String, dynamic>) {
+                      jsonMap = decoded;
+                    }
+                  } catch (e) {
+                    if (kDebugMode) {
+                      debugPrint('POSIX entry json parse error for ${entryDir.path}: $e');
+                    }
+                  }
+                }
+                if (jsonMap != null) {
                   final entry = BiliDownloadEntryInfo.fromLenientJson(jsonMap)
                     ..pageDirPath = pageDir.path
                     ..entryDirPath = entryDir.path;
