@@ -9,6 +9,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileInputStream
+import java.io.FileOutputStream
 import java.io.IOException
 
 object SafStorageBridge {
@@ -50,36 +51,49 @@ object SafStorageBridge {
         val ext = fileName.substringAfterLast('.', "")
         val mimeType = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext) ?: "application/octet-stream"
 
-        // Use findFile or createFile with write-truncate ("wt") to prevent duplicate "(1)" files on external SD cards
-        val targetDoc = targetDir.findFile(fileName)
-            ?: targetDir.createFile(mimeType, fileName)
+        // If target file already exists, delete it first to prevent corrupt cluster reuse or partial overwrite on FAT32/exFAT SD cards
+        targetDir.findFile(fileName)?.let { existingDoc ->
+            try { existingDoc.delete() } catch (_: Exception) {}
+        }
+
+        val targetDoc = targetDir.createFile(mimeType, fileName)
             ?: return@withContext Result.failure(IOException("Failed to create SAF document for $fileName"))
 
         try {
-            val outStream = try {
-                context.contentResolver.openOutputStream(targetDoc.uri, "rwt")
-                    ?: context.contentResolver.openOutputStream(targetDoc.uri, "w")
+            val pfd = try {
+                context.contentResolver.openFileDescriptor(targetDoc.uri, "wt")
+                    ?: context.contentResolver.openFileDescriptor(targetDoc.uri, "w")
             } catch (e: Exception) {
-                try {
-                    context.contentResolver.openOutputStream(targetDoc.uri, "w")
-                } catch (e2: Exception) {
-                    context.contentResolver.openOutputStream(targetDoc.uri)
-                }
-            } ?: return@withContext Result.failure(IOException("Failed to open SAF output stream for ${targetDoc.uri}"))
+                context.contentResolver.openFileDescriptor(targetDoc.uri, "w")
+            } ?: return@withContext Result.failure(IOException("Failed to open SAF PFD for ${targetDoc.uri}"))
 
-            outStream.use { os ->
-                FileInputStream(srcFile).use { input ->
-                    input.copyTo(os, bufferSize = 512 * 1024)
-                    os.flush()
+            pfd.use { parcelFd ->
+                FileOutputStream(parcelFd.fileDescriptor).use { os ->
+                    FileInputStream(srcFile).use { input ->
+                        input.copyTo(os, bufferSize = 512 * 1024)
+                        os.flush()
+                        try {
+                            parcelFd.fileDescriptor.sync()
+                        } catch (_: Exception) {}
+                    }
                 }
             }
 
-            // Cleanup local staging file
+            // Post-commit size verification
+            val targetLen = targetDoc.length()
+            val srcLen = srcFile.length()
+            if (targetLen != srcLen) {
+                try { targetDoc.delete() } catch (_: Exception) {}
+                return@withContext Result.failure(IOException("SAF commit size mismatch: expected $srcLen, got $targetLen"))
+            }
+
+            // Cleanup local staging file only after verified commit
             srcFile.delete()
-            Log.i(TAG, "Successfully committed $fileName to SAF: ${targetDoc.uri} (size: ${targetDoc.length()})")
+            Log.i(TAG, "Successfully committed $fileName to SAF: ${targetDoc.uri} (verified size: $targetLen)")
             Result.success(targetDoc.uri.toString())
         } catch (e: Exception) {
             Log.e(TAG, "Error committing $fileName to SAF", e)
+            try { targetDoc.delete() } catch (_: Exception) {}
             Result.failure(e)
         }
     }

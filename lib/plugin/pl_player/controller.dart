@@ -1118,9 +1118,17 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       if (kDebugMode)
         stream.log.listen(((PlayerLog log) {
           if (log.level == 'error' || log.level == 'fatal') {
-            Utils.reportError(
-              '${log.level}: ${log.prefix}: ${log.text}\n${player.state.playlist}',
-              null,
+            // 对频繁的解码警告与 NAL 错误做强限流，禁止高频调用重型 Catcher2 导致主线程 ANR
+            final logKey = '${log.prefix}_${log.text.split(':').first}';
+            EasyThrottle.throttle(
+              'player_error_log_$logKey',
+              const Duration(seconds: 3),
+              () {
+                Utils.reportError(
+                  '${log.level}: ${log.prefix}: ${log.text}\n${player.state.playlist}',
+                  null,
+                );
+              },
             );
           } else {
             debugPrint(log.toString());

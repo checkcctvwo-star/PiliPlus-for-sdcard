@@ -1088,6 +1088,20 @@ class DownloadService extends GetxService {
         entry
           ..pageDirPath = targetPath
           ..entryDirPath = '$targetPath/$dirName/$pageDirName';
+      } else {
+        if (kDebugMode) {
+          debugPrint('Failed to commit staging entry to SAF storage: $commitRes');
+        }
+        entry.isCompleted = false;
+        entry.status = DownloadStatus.failDownload;
+        await _updateBiliDownloadEntryJson(entry);
+        _updateCurStatus(DownloadStatus.failDownload);
+        _curCid = null;
+        curDownload.value = null;
+        _downloadManager = null;
+        _audioDownloadManager = null;
+        nextDownload();
+        return;
       }
     }
 

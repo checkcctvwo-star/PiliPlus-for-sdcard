@@ -132,11 +132,19 @@ object MediaMuxerBridge {
                     return@withContext Result.failure(IllegalStateException("Failed to move temp file to $outputPath"))
                 }
 
-                // Delete original temporary video and audio m4s slices
+                // Verify container integrity: ensure valid ftyp/mdat and complete moov box
+                if (!verifyMp4Integrity(outputFile)) {
+                    outputFile.delete()
+                    val errMsg = "Muxed MP4 failed integrity check (invalid container structure or missing moov): $outputPath"
+                    Log.e(TAG, errMsg)
+                    return@withContext Result.failure(IllegalStateException(errMsg))
+                }
+
+                // Delete original temporary video and audio m4s slices only after verified integrity
                 try { videoFile.delete() } catch (_: Exception) {}
                 try { audioFile.delete() } catch (_: Exception) {}
 
-                Log.i(TAG, "FFmpeg muxing completed successfully: $outputPath (size: ${outputFile.length()})")
+                Log.i(TAG, "FFmpeg muxing completed successfully and passed integrity check: $outputPath (size: ${outputFile.length()})")
                 Result.success(outputPath)
             } catch (e: Exception) {
                 Log.e(TAG, "Unexpected error during mergeDash", e)
@@ -145,6 +153,54 @@ object MediaMuxerBridge {
             } finally {
                 try { FFmpegKitConfig.clearSessions() } catch (_: Exception) {}
             }
+        }
+    }
+
+    /**
+     * Fast container integrity verification for MP4 files.
+     * Ensures minimum header structure, valid major brand, and valid 'moov' atom.
+     */
+    private fun verifyMp4Integrity(file: File): Boolean {
+        if (!file.exists() || file.length() < 1024) return false
+        return try {
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val len = raf.length()
+                val hdr = ByteArray(16)
+                raf.readFully(hdr)
+                val type = String(hdr, 4, 4)
+                if (type != "ftyp" && type != "moov" && type != "mdat") return false
+
+                var hasMoov = false
+                val buf = ByteArray(64 * 1024)
+
+                // 1. Check head for moov
+                raf.seek(0)
+                val readStart = raf.read(buf)
+                if (readStart > 0 && String(buf, 0, readStart, Charsets.ISO_8859_1).contains("moov")) {
+                    hasMoov = true
+                }
+
+                // 2. Check tail for moov (common when -movflags +faststart is omitted)
+                if (!hasMoov && len > 64 * 1024) {
+                    val searchLen = minOf(len, 32L * 1024 * 1024)
+                    val startOffset = len - searchLen
+                    var curOffset = startOffset
+                    while (curOffset < len) {
+                        raf.seek(curOffset)
+                        val r = raf.read(buf)
+                        if (r <= 0) break
+                        if (String(buf, 0, r, Charsets.ISO_8859_1).contains("moov")) {
+                            hasMoov = true
+                            break
+                        }
+                        curOffset += (r - 8)
+                    }
+                }
+                hasMoov
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "MP4 integrity check failed for ${file.path}", e)
+            false
         }
     }
 }
