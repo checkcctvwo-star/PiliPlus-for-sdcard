@@ -792,7 +792,7 @@ class VideoDetailController extends GetxController
       isFileSource
           ? FileSource(
               dir: args['dirPath'],
-              typeTag: entry.typeTag!,
+              typeTag: entry.typeTag ?? entry.preferedVideoQuality.toString(),
               isMp4: entry.mediaType == 1,
               hasDashAudio: entry.hasDashAudio,
               safFileUris: entry.safFileUris,

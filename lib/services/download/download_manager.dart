@@ -305,24 +305,45 @@ class DownloadManager {
       }
     }
 
-    Response<ResponseBody> response;
-    try {
-      response = await Request.http11Dio.get<ResponseBody>(
-        url.http2https,
-        options: Options(
-          headers: headers,
-          responseType: ResponseType.stream,
-          validateStatus: (status) =>
-              status != null &&
-              (status == 416 || (status >= 200 && status < 300)),
-        ),
-        cancelToken: _cancelToken,
-      );
-    } on DioException catch (e) {
-      await onError(e, delete: false);
-      return;
-    } catch (e) {
-      await onError(e, delete: false);
+    Response<ResponseBody>? response;
+    int retryCount = 0;
+    while (retryCount < 3) {
+      try {
+        response = await Request.http11Dio.get<ResponseBody>(
+          url.http2https,
+          options: Options(
+            headers: headers,
+            responseType: ResponseType.stream,
+            validateStatus: (status) =>
+                status != null &&
+                (status == 416 || (status >= 200 && status < 300)),
+          ),
+          cancelToken: _cancelToken,
+        );
+        break;
+      } on DioException catch (e) {
+        if (_cancelToken.isCancelled) {
+          await onError(e, delete: false);
+          return;
+        }
+        retryCount++;
+        if (retryCount >= 3) {
+          await onError(e, delete: false);
+          return;
+        }
+        await Future.delayed(Duration(milliseconds: 1000 * retryCount));
+        if (file.existsSync()) {
+          received = await file.length();
+          headers['range'] = 'bytes=$received-';
+        }
+      } catch (e) {
+        await onError(e, delete: false);
+        return;
+      }
+    }
+
+    if (response == null) {
+      await onError(Exception('Download failed after retries'), delete: false);
       return;
     }
 

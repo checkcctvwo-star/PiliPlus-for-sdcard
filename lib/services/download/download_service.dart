@@ -224,13 +224,22 @@ class DownloadService extends GetxService {
 
   /// 防 412 串行深度自愈：扫描磁盘恢复未录入的任务时，使用严格串行遍历，并在请求 B 站 API 前强制等待 600ms，彻底绕过 WAF 412 封禁
   Future<void> deepScanRecovery() async {
-    final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue];
     final type = GStorage.setting.get(
       SettingBoxKey.downloadDirType,
       defaultValue: 0,
     ) as int;
     final safUri = GStorage.setting.get('downloadPath') as String?;
 
+    // 在 Android SAF 树形目录模式下，外置物理 SD 卡受 Android 12 Scoped Storage 限制禁止 POSIX 读取，
+    // 直接复用原生 SAF DocumentFile 遍历，彻底杜绝 Permission denied (errno 13)
+    if (type == 2 || (safUri != null && safUri.startsWith('content://'))) {
+      await _readDownloadList();
+      waitDownloadQueue.refresh();
+      flagNotifier.refresh();
+      return;
+    }
+
+    final tempWaitQueue = <BiliDownloadEntryInfo>[...waitDownloadQueue];
     final folders = <String>{};
     String downloadPathStr = await _getDownloadPath();
     if (type == 2 && safUri != null && safUri.isNotEmpty && Platform.isAndroid) {
@@ -933,11 +942,18 @@ class DownloadService extends GetxService {
 
   void _onDone([Object? error]) {
     if (error != null) {
-      _updateCurStatus(_downloadManager?.status ?? DownloadStatus.pause);
+      final failStatus = _downloadManager?.status ?? DownloadStatus.failDownload;
+      _updateCurStatus(failStatus);
+      _curCid = null;
+      curDownload.value = null;
+      _downloadManager = null;
+      _audioDownloadManager = null;
+      nextDownload();
       return;
     }
 
-    final status = switch (_audioDownloadManager?.status) {
+    final audioStatus = _audioDownloadManager?.status;
+    final status = switch (audioStatus) {
       DownloadStatus.downloading => DownloadStatus.audioDownloading,
       DownloadStatus.failDownload => DownloadStatus.failDownloadAudio,
       _ => _downloadManager?.status ?? DownloadStatus.pause,
@@ -948,6 +964,12 @@ class DownloadService extends GetxService {
       curEntryInfo.downloadedBytes = curEntryInfo.totalBytes;
       if (status == DownloadStatus.completed) {
         _completeDownload();
+      } else if (status == DownloadStatus.failDownload || status == DownloadStatus.failDownloadAudio) {
+        _curCid = null;
+        curDownload.value = null;
+        _downloadManager = null;
+        _audioDownloadManager = null;
+        nextDownload();
       } else {
         _updateBiliDownloadEntryJson(curEntryInfo);
       }
@@ -955,17 +977,19 @@ class DownloadService extends GetxService {
   }
 
   void _onAudioDone([Object? error]) {
+    if (error != null) {
+      _audioDownloadManager?.status = DownloadStatus.failDownload;
+      _updateCurStatus(DownloadStatus.failDownloadAudio);
+      _curCid = null;
+      curDownload.value = null;
+      _downloadManager = null;
+      _audioDownloadManager = null;
+      nextDownload();
+      return;
+    }
+
     if (_downloadManager?.status == DownloadStatus.completed) {
-      if (error == null) {
-        _completeDownload();
-      } else {
-        final status = _audioDownloadManager?.status ?? DownloadStatus.pause;
-        _updateCurStatus(
-          status == DownloadStatus.failDownload
-              ? DownloadStatus.failDownloadAudio
-              : status,
-        );
-      }
+      _completeDownload();
     }
   }
 
@@ -1045,14 +1069,15 @@ class DownloadService extends GetxService {
       SettingBoxKey.downloadDirType,
       defaultValue: 0,
     ) as int;
+    final targetPath = downloadPath.isNotEmpty ? downloadPath : await _getDownloadPath();
 
     // 如果目标是 SAF 树形目录模式，将暂存目录原子提交到 SAF DocumentFile 树
-    if (type == 2 || downloadPath.startsWith('content://')) {
+    if (type == 2 || targetPath.startsWith('content://')) {
       final stagingEntryPath = entry.entryDirPath;
       final commitRes = await DownloadManager.commitStagingEntry(
         stagingEntryPath: stagingEntryPath,
         targetType: 2,
-        targetBaseDir: downloadPath,
+        targetBaseDir: targetPath,
         relativePath: '$dirName/$pageDirName',
       );
       if (commitRes != null && commitRes['success'] == true) {
@@ -1061,8 +1086,8 @@ class DownloadService extends GetxService {
           entry.safFileUris = safUris;
         }
         entry
-          ..pageDirPath = downloadPath
-          ..entryDirPath = '$downloadPath/$dirName/$pageDirName';
+          ..pageDirPath = targetPath
+          ..entryDirPath = '$targetPath/$dirName/$pageDirName';
       }
     }
 

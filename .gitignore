@@ -152,4 +152,4 @@ dist
 test*
 
 # Local research and tools
-tools/
+tools/tool_adb.py
